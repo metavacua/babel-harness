@@ -12,6 +12,7 @@ OPENROUTER_MODEL="${OPENROUTER_MODEL:-auto}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
 CGROUP_NAME="babel-harness"
 CGROUP_MEMORY_BYTES=5368709120  # 5 GB
+CGROUP_CPU_RESERVE_CORES="${CGROUP_CPU_RESERVE_CORES:-2}"  # cores to leave free for OS
 
 usage() {
   cat <<'EOF'
@@ -57,10 +58,35 @@ _repair_ollama() {
 
 _setup_cgroup() {
   local cg_mem="/sys/fs/cgroup/memory/$CGROUP_NAME"
-  sudo mkdir -p "$cg_mem" 2>/dev/null || return 1
+  local cg_cpu="/sys/fs/cgroup/cpu/$CGROUP_NAME"
+  sudo mkdir -p "$cg_mem" "$cg_cpu" 2>/dev/null || return 1
+
+  # Memory — hard ceiling; prevents OOM on the shared 6.3 GB heap
   echo "$CGROUP_MEMORY_BYTES" | sudo tee "$cg_mem/memory.limit_in_bytes" > /dev/null 2>&1 || return 1
   echo "0" | sudo tee "$cg_mem/memory.swappiness" > /dev/null 2>&1 || true
+
+  # CPU quota — enforced here, not borrowed from the environment's service unit
+  local ncores period quota
+  ncores=$(nproc 2>/dev/null || echo 4)
+  period=100000  # 100 ms scheduling window
+  local allowed=$(( ncores > CGROUP_CPU_RESERVE_CORES ? ncores - CGROUP_CPU_RESERVE_CORES : 1 ))
+  quota=$(( allowed * period ))
+  echo "$period" | sudo tee "$cg_cpu/cpu.cfs_period_us" > /dev/null 2>&1 || true
+  echo "$quota"  | sudo tee "$cg_cpu/cpu.cfs_quota_us"  > /dev/null 2>&1 || true
+
   return 0
+}
+
+_enroll_ollama_in_cgroup() {
+  # Move the live Ollama server process into this harness's cgroup so its CPU
+  # and memory are bounded by the same limits as Pi — regardless of whether
+  # the systemd unit has CPUQuota or any other external constraint set.
+  local ollama_pid
+  ollama_pid=$(pgrep -f "ollama serve" 2>/dev/null | head -1) || return 0
+  [ -z "$ollama_pid" ] && return 0
+  echo "$ollama_pid" | sudo tee "/sys/fs/cgroup/cpu/$CGROUP_NAME/cgroup.procs"    > /dev/null 2>&1 || true
+  echo "$ollama_pid" | sudo tee "/sys/fs/cgroup/memory/$CGROUP_NAME/cgroup.procs" > /dev/null 2>&1 || true
+  echo "pi-harness: enrolled ollama PID $ollama_pid in $CGROUP_NAME cgroup" >&2
 }
 
 cmd_status() {
@@ -123,9 +149,12 @@ cmd_run() {
   fi
 
   if [ "$no_cgroup" = "0" ] && _setup_cgroup; then
-    local cg_procs="/sys/fs/cgroup/memory/$CGROUP_NAME/cgroup.procs"
+    # Enroll the Ollama server so its usage is bounded by the harness cgroup,
+    # independently of any external (systemd) resource configuration.
+    [ "$provider" = "ollama" ] && _enroll_ollama_in_cgroup
     (
-      echo "$BASHPID" | sudo tee "$cg_procs" > /dev/null 2>&1 || true
+      echo "$BASHPID" | sudo tee "/sys/fs/cgroup/cpu/$CGROUP_NAME/cgroup.procs"    > /dev/null 2>&1 || true
+      echo "$BASHPID" | sudo tee "/sys/fs/cgroup/memory/$CGROUP_NAME/cgroup.procs" > /dev/null 2>&1 || true
       exec "$PI_BIN" --provider "$provider" --model "$model" --print --mode json "$task"
     )
   else
