@@ -4,11 +4,15 @@ set -euo pipefail
 
 # --- Testable seams ---
 OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/models}"
-LARQL_BIN="${LARQL_BIN:-$HOME/larql/target/release/larql}"
+# Release binary delegates 'serve' to a separate larql-server binary not yet built;
+# use the debug build which ships larql-server alongside larql.
+LARQL_BIN="${LARQL_BIN:-$HOME/larql-main/.worktrees/plan4-agent/target/debug/larql}"
 LARQL_PORT="${LARQL_PORT:-8080}"
 LARQL_VINDEX="${LARQL_VINDEX:-smollm2-360m}"
-OPENROUTER_MODEL="${OPENROUTER_MODEL:-qwen/qwen3-235b-a22b:free}"
+OPENROUTER_MODEL="${OPENROUTER_MODEL:-qwen/qwen3-coder:free}"
 GOOSE_BIN="${GOOSE_BIN:-goose}"
+# larql-server pre-loads weights: ~16s for smollm2-360m (vs 40min for 7B via Ollama)
+LARQL_START_TIMEOUT="${LARQL_START_TIMEOUT:-30}"
 
 usage() {
   cat <<'EOF'
@@ -34,7 +38,7 @@ _start_larql_server() {
   echo "coding-agent: starting larql serve $vindex on port $LARQL_PORT..." >&2
   "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" > /dev/null 2>&1 &
   # larql loads via mmap — typically ready in < 500 ms; poll up to 5 s
-  local deadline=$(( $(date +%s) + 5 ))
+  local deadline=$(( $(date +%s) + LARQL_START_TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if _check_larql; then
       echo "coding-agent: larql serve ready" >&2

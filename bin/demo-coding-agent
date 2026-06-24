@@ -29,6 +29,6 @@ OPENROUTER_CHECK_URL=http://offline.invalid "$AGENT" "$TASK" 2>&1
 t1=$(date +%s%N)
 elapsed=$(( (t1 - t0) / 1000000 ))
 echo ""
-echo "  elapsed: ${elapsed}ms  (larql: <500ms startup, first token <60s for 360M CPU)"
+echo "  elapsed: ${elapsed}ms  (larql smollm2-360m: ~16s weight preload vs 40min for 7B Ollama)"
 echo ""
 echo "=============================================="
