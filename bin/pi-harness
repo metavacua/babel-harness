@@ -6,9 +6,9 @@ set -euo pipefail
 PI_BIN="${PI_BIN:-$(command -v pi 2>/dev/null || echo "$HOME/.local/share/pi-node/current/bin/pi")}"
 OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/models}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 
 # --- Defaults ---
-CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-auto}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
 CGROUP_NAME="babel-harness"
@@ -23,7 +23,6 @@ Options:
   --status        Report OpenRouter and Ollama health
   --repair        Attempt to fix Ollama (restart service)
   --model M       Override model, format: provider/model
-  --no-cgroup     Skip cgroup enforcement
   -h, --help      Show this help
 EOF
 }
@@ -38,7 +37,6 @@ _check_ollama() {
 
 _warmup_ollama_model() {
   local model="$1"
-  # Check if the model is already hot in Ollama without triggering inference
   local ps_resp
   ps_resp=$(curl -sf --max-time 5 "$OLLAMA_URL/api/ps" 2>/dev/null)
   if echo "$ps_resp" | grep -q "\"$model\""; then
@@ -62,7 +60,7 @@ _setup_cgroup() {
   local cg_cpu="${CGROUP_ROOT}/cpu/$CGROUP_NAME"
   sudo mkdir -p "$cg_mem" "$cg_cpu" 2>/dev/null || return 1
 
-  # Memory — hard ceiling; prevents OOM on the shared 6.3 GB heap
+  # Memory — hard ceiling; prevents OOM on the shared heap
   echo "$CGROUP_MEMORY_BYTES" | sudo tee "$cg_mem/memory.limit_in_bytes" > /dev/null 2>&1 || return 1
   echo "0" | sudo tee "$cg_mem/memory.swappiness" > /dev/null 2>&1 || true
 
@@ -128,7 +126,6 @@ _select_provider_model() {
 cmd_run() {
   local task="$1"
   local model_override="${2:-}"
-  local no_cgroup="${3:-0}"
 
   local provider model
   if [ -n "$model_override" ]; then
@@ -144,44 +141,42 @@ cmd_run() {
 
   echo "pi-harness: provider=$provider model=$model" >&2
 
-  # Warm up the local model before invoking Pi (CPU load can exceed Pi's internal timeout)
   if [ "$provider" = "ollama" ]; then
-    _warmup_ollama_model "$model" || return 1
+    _warmup_ollama_model "$model"
   fi
 
-  if [ "$no_cgroup" = "0" ] && _setup_cgroup; then
-    # Enroll the Ollama server so its usage is bounded by the harness cgroup,
-    # independently of any external (systemd) resource configuration.
-    [ "$provider" = "ollama" ] && _enroll_ollama_in_cgroup
-    (
-      # Capture $BASHPID before entering any pipeline: piping echo "$BASHPID" would
-      # evaluate $BASHPID in the echo-subshell, giving a PID that exits before tee
-      # writes it, resulting in a silent "No such process" and no enrollment.
-      _self=$BASHPID
-      echo "$_self" | sudo tee "${CGROUP_ROOT}/cpu/$CGROUP_NAME/cgroup.procs"    > /dev/null 2>&1 || true
-      echo "$_self" | sudo tee "${CGROUP_ROOT}/memory/$CGROUP_NAME/cgroup.procs" > /dev/null 2>&1 || true
-      exec "$PI_BIN" --provider "$provider" --model "$model" --print --mode json "$task"
-    )
-  else
-    [ "$no_cgroup" = "0" ] && echo "pi-harness: cgroup setup failed, proceeding without limit" >&2 || true
-    "$PI_BIN" --provider "$provider" --model "$model" --print --mode json "$task"
+  if ! _setup_cgroup; then
+    echo "pi-harness: FATAL: cgroup enforcement required but setup failed" >&2
+    echo "pi-harness: running unconstrained risks CPU/memory exhaustion on this hardware" >&2
+    echo "pi-harness: check sudo permissions for ${CGROUP_ROOT}" >&2
+    return 1
   fi
+
+  [ "$provider" = "ollama" ] && _enroll_ollama_in_cgroup
+
+  (
+    # Capture $BASHPID before entering any pipeline: the pipeline creates a new
+    # subshell for echo, so $BASHPID inside the pipeline is the echo-subshell's
+    # PID — which exits before tee writes, producing silent ENOENT.
+    _self=$BASHPID
+    echo "$_self" | sudo tee "${CGROUP_ROOT}/cpu/$CGROUP_NAME/cgroup.procs"    > /dev/null 2>&1 || true
+    echo "$_self" | sudo tee "${CGROUP_ROOT}/memory/$CGROUP_NAME/cgroup.procs" > /dev/null 2>&1 || true
+    exec "$PI_BIN" --provider "$provider" --model "$model" --print --mode json "$task"
+  )
 }
 
 # --- Argument parsing ---
 MODEL_OVERRIDE=""
-NO_CGROUP=0
 TASK=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --status)    cmd_status; exit 0 ;;
-    --repair)    cmd_repair; exit $? ;;
-    --model)     MODEL_OVERRIDE="$2"; shift 2 ;;
-    --no-cgroup) NO_CGROUP=1; shift ;;
-    -h|--help)   usage; exit 0 ;;
-    -*)          echo "pi-harness: unknown option: $1" >&2; usage; exit 1 ;;
-    *)           TASK="$1"; shift ;;
+    --status)  cmd_status; exit 0 ;;
+    --repair)  cmd_repair; exit $? ;;
+    --model)   MODEL_OVERRIDE="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    -*)        echo "pi-harness: unknown option: $1" >&2; usage; exit 1 ;;
+    *)         TASK="$1"; shift ;;
   esac
 done
 
@@ -191,4 +186,4 @@ if [ -z "$TASK" ]; then
   exit 1
 fi
 
-cmd_run "$TASK" "$MODEL_OVERRIDE" "$NO_CGROUP"
+cmd_run "$TASK" "$MODEL_OVERRIDE"
