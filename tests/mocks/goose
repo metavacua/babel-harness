@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Mock goose binary — records provider env vars and returns a fixed response.
 # Records each invocation to $MOCK_CALL_LOG if set.
