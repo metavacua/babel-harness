@@ -17,6 +17,9 @@ LARQL_START_TIMEOUT="${LARQL_START_TIMEOUT:-30}"
 LARQL_LOG_FILE="${LARQL_LOG_FILE:-/tmp/larql-server-${LARQL_PORT}.log}"
 # timeout for a single Goose inference call; 124 = timeout exit code
 LARQL_INFERENCE_TIMEOUT="${LARQL_INFERENCE_TIMEOUT:-120}"
+# how to find the actual server PID after startup (injectable for testing)
+# default: look for the process listening on LARQL_PORT via ss
+LARQL_SERVER_FINDER="${LARQL_SERVER_FINDER:-}"
 
 usage() {
   cat <<'EOF'
@@ -39,6 +42,15 @@ _check_larql() {
   curl -sf --max-time 3 "http://localhost:${LARQL_PORT}/v1/models" > /dev/null 2>&1
 }
 
+_larql_find_server_pid() {
+  if [ -n "$LARQL_SERVER_FINDER" ]; then
+    eval "$LARQL_SERVER_FINDER" 2>/dev/null || true
+  else
+    # larql exits after spawning larql-server; find the process listening on the port
+    ss -tlpn "sport = :${LARQL_PORT}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true
+  fi
+}
+
 _larql_cleanup() {
   [ -n "${_LARQL_SERVER_PID:-}" ] && kill "$_LARQL_SERVER_PID" 2>/dev/null || true
 }
@@ -54,7 +66,9 @@ _start_larql_server() {
   local deadline=$(( $(date +%s) + LARQL_START_TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if _check_larql; then
-      echo "coding-agent: larql serve ready (PID $_LARQL_SERVER_PID)" >&2
+      # larql exits immediately after spawning larql-server; find the actual server PID
+      _LARQL_SERVER_PID=$(_larql_find_server_pid)
+      echo "coding-agent: larql serve ready (PID ${_LARQL_SERVER_PID:-unknown})" >&2
       return 0
     fi
     sleep 0.2

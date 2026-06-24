@@ -183,28 +183,29 @@ assert_exit "times out when goose exceeds LARQL_INFERENCE_TIMEOUT" "124" "$rc"
 rm -f "$calllog"
 
 echo ""
-echo "--- 9: larql-server PID is killed when coding-agent exits (issue #2) ---"
+echo "--- 9: larql-server subprocess PID is killed when coding-agent exits (issue #2) ---"
 pid_file=$(mktemp)
 counter_file=$(mktemp)
 calllog=$(mktemp)
-# Mock larql serve stays alive (writes PID); poll succeeds on 2nd health check call
+# Mock larql: forks sleep 9999 (writes PID), then exits immediately — same as real larql.
+# LARQL_SERVER_FINDER tells coding-agent how to find the subprocess PID (in production:
+# ss -tlpn; in tests: read from the file the mock wrote).
 out=$(PATH="$MOCKS:$PATH" \
   MOCK_CURL_OPENROUTER_EXIT=1 \
   MOCK_LARQL_RUNNING_AFTER=2 \
   MOCK_LARQL_COUNTER_FILE="$counter_file" \
   MOCK_CALL_LOG="$calllog" \
-  MOCK_LARQL_SERVE_STAY_ALIVE=1 \
   MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
+  LARQL_SERVER_FINDER="cat $pid_file" \
   GOOSE_BIN="$MOCKS/goose" \
   LARQL_BIN="$MOCKS/larql" \
   bash "$AGENT" "write a hello function" 2>&1 || true)
 server_pid=$(cat "$pid_file" 2>/dev/null || echo "")
-# After coding-agent exits, the larql-server PID must be dead
 if [ -n "$server_pid" ] && kill -0 "$server_pid" 2>/dev/null; then
-  kill "$server_pid" 2>/dev/null || true  # clean up for test isolation
-  assert_fail "larql-server PID killed on coding-agent exit" "PID $server_pid still alive after exit"
+  kill "$server_pid" 2>/dev/null || true
+  assert_fail "larql-server subprocess PID killed on coding-agent exit" "PID $server_pid still alive after exit"
 else
-  assert_pass "larql-server PID killed on coding-agent exit"
+  assert_pass "larql-server subprocess PID killed on coding-agent exit"
 fi
 rm -f "$calllog" "$pid_file" "$counter_file"
 

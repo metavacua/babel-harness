@@ -8,10 +8,12 @@ fi
 # For "serve": return immediately, OR stay alive for PID-cleanup tests.
 # Set MOCK_LARQL_SERVE_STAY_ALIVE=1 and MOCK_LARQL_SERVE_PID_FILE to test cleanup.
 if [ "${1:-}" = "serve" ]; then
-  if [ "${MOCK_LARQL_SERVE_STAY_ALIVE:-}" = "1" ] && [ -n "${MOCK_LARQL_SERVE_PID_FILE:-}" ]; then
-    echo $$ > "$MOCK_LARQL_SERVE_PID_FILE"
-    sleep 9999  # stay alive until killed by coding-agent EXIT trap
+  if [ -n "${MOCK_LARQL_SERVE_PID_FILE:-}" ]; then
+    # Simulate larql behavior: fork a long-running child (like larql-server), then exit.
+    # Write child PID so the test can verify it was killed.
+    sleep 9999 &
+    echo $! > "$MOCK_LARQL_SERVE_PID_FILE"
   fi
-  exit 0
+  exit 0  # exits immediately, like real larql does after spawning larql-server
 fi
 exit "${MOCK_LARQL_EXIT:-0}"
