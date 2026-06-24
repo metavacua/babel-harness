@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -euo pipefail
+
+# --- Testable seams ---
+OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/models}"
+LARQL_BIN="${LARQL_BIN:-$HOME/larql/target/release/larql}"
+LARQL_PORT="${LARQL_PORT:-8080}"
+LARQL_VINDEX="${LARQL_VINDEX:-smollm2-360m}"
+OPENROUTER_MODEL="${OPENROUTER_MODEL:-qwen/qwen3-235b-a22b:free}"
+GOOSE_BIN="${GOOSE_BIN:-goose}"
+
+usage() {
+  cat <<'EOF'
+Usage: coding-agent [OPTIONS] TASK
+
+Options:
+  --model M     Force provider/model (e.g. openrouter/qwen/qwen3-235b-a22b:free
+                or larql/smollm2-360m)
+  -h, --help    Show this help
+EOF
+}
+
+_check_openrouter() {
+  curl -sf --max-time 3 "$OPENROUTER_CHECK_URL" > /dev/null 2>&1
+}
+
+_check_larql() {
+  curl -sf --max-time 3 "http://localhost:${LARQL_PORT}/v1/models" > /dev/null 2>&1
+}
+
+_start_larql_server() {
+  local vindex="$1"
+  echo "coding-agent: starting larql serve $vindex on port $LARQL_PORT..." >&2
+  "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" > /dev/null 2>&1 &
+  # larql loads via mmap — typically ready in < 500 ms; poll up to 5 s
+  local deadline=$(( $(date +%s) + 5 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if _check_larql; then
+      echo "coding-agent: larql serve ready" >&2
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "coding-agent: timeout waiting for larql serve to start" >&2
+  return 1
+}
+
+_run_goose_openrouter() {
+  local model="$1" task="$2"
+  echo "coding-agent: provider=openrouter model=$model" >&2
+  GOOSE_PROVIDER=openrouter GOOSE_MODEL="$model" \
+    "$GOOSE_BIN" run -t "$task"
+}
+
+_run_goose_larql() {
+  local vindex="$1" task="$2"
+  echo "coding-agent: provider=larql (openai-compat) model=$vindex" >&2
+  GOOSE_PROVIDER=openai \
+    OPENAI_BASE_URL="http://localhost:${LARQL_PORT}/v1" \
+    OPENAI_API_KEY=larql \
+    GOOSE_MODEL="$vindex" \
+    "$GOOSE_BIN" run -t "$task"
+}
+
+# --- Argument parsing ---
+MODEL_OVERRIDE=""
+TASK=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model) MODEL_OVERRIDE="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    -*) echo "coding-agent: unknown option: $1" >&2; usage; exit 1 ;;
+    *) TASK="$1"; shift ;;
+  esac
+done
+
+if [ -z "$TASK" ]; then
+  echo "coding-agent: TASK argument required" >&2
+  usage
+  exit 1
+fi
+
+# --- Model override: larql/VINDEX forces local path regardless of OpenRouter ---
+if [ -n "$MODEL_OVERRIDE" ]; then
+  local_provider="${MODEL_OVERRIDE%%/*}"
+  local_model="${MODEL_OVERRIDE#*/}"
+  if [ "$local_provider" = "larql" ]; then
+    if ! _check_larql; then
+      _start_larql_server "$local_model" || exit 1
+    fi
+    _run_goose_larql "$local_model" "$TASK"
+    exit $?
+  else
+    _run_goose_openrouter "$local_model" "$TASK"
+    exit $?
+  fi
+fi
+
+# --- Auto-select provider ---
+if _check_openrouter; then
+  _run_goose_openrouter "$OPENROUTER_MODEL" "$TASK"
+else
+  local_vindex="$LARQL_VINDEX"
+  if ! _check_larql; then
+    _start_larql_server "$local_vindex" || exit 1
+  fi
+  _run_goose_larql "$local_vindex" "$TASK"
+fi
