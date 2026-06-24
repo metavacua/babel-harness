@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+_provider=$(echo "$*" | grep -o -- '--provider [^ ]*' | awk '{print $2}')
+_model=$(echo "$*" | grep -o -- '--model [^ ]*' | awk '{print $2}')
+echo "MOCK_PI_INVOKED provider=${_provider} model=${_model}" >&2
+echo '{"role":"assistant","content":"MOCK_RESPONSE"}'
+exit "${MOCK_PI_EXIT:-0}"

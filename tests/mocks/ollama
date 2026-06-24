@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+exit "${MOCK_OLLAMA_EXIT:-0}"
