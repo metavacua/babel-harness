@@ -14,6 +14,8 @@ OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
 CGROUP_NAME="babel-harness"
 CGROUP_MEMORY_BYTES=5368709120  # 5 GB
 CGROUP_CPU_RESERVE_CORES="${CGROUP_CPU_RESERVE_CORES:-2}"  # cores to leave free for OS
+OLLAMA_WARMUP_POLL_INTERVAL="${OLLAMA_WARMUP_POLL_INTERVAL:-10}"  # seconds between api/ps polls
+OLLAMA_WARMUP_TIMEOUT="${OLLAMA_WARMUP_TIMEOUT:-1200}"            # 20 min; CPU load is slow
 
 usage() {
   cat <<'EOF'
@@ -38,14 +40,32 @@ _check_ollama() {
 _warmup_ollama_model() {
   local model="$1"
   local ps_resp
+
   ps_resp=$(curl -sf --max-time 5 "$OLLAMA_URL/api/ps" 2>/dev/null)
   if echo "$ps_resp" | grep -q "\"$model\""; then
     echo "pi-harness: $model already loaded" >&2
-  else
-    echo "pi-harness: $model not yet loaded — Ollama will load it on first Pi request" >&2
-    echo "pi-harness: (CPU-only load may take several minutes; Pi result will arrive after it completes)" >&2
+    return 0
   fi
-  return 0
+
+  # Trigger model load with no inference — keeps Ollama within the already-established cgroup
+  echo "pi-harness: loading $model (CPU-only; may take several minutes)..." >&2
+  curl -sf --max-time 10 "$OLLAMA_URL/api/generate" \
+    -d "{\"model\":\"$model\",\"prompt\":\"\",\"stream\":false,\"options\":{\"num_predict\":0}}" \
+    > /dev/null 2>&1 || true
+
+  # Poll until the model appears in api/ps, confirming the runner is live
+  local deadline=$(( $(date +%s) + OLLAMA_WARMUP_TIMEOUT ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    ps_resp=$(curl -sf --max-time 5 "$OLLAMA_URL/api/ps" 2>/dev/null)
+    if echo "$ps_resp" | grep -q "\"$model\""; then
+      echo "pi-harness: $model ready" >&2
+      return 0
+    fi
+    sleep "$OLLAMA_WARMUP_POLL_INTERVAL"
+  done
+
+  echo "pi-harness: timeout after ${OLLAMA_WARMUP_TIMEOUT}s waiting for $model to load" >&2
+  return 1
 }
 
 _repair_ollama() {
@@ -141,10 +161,6 @@ cmd_run() {
 
   echo "pi-harness: provider=$provider model=$model" >&2
 
-  if [ "$provider" = "ollama" ]; then
-    _warmup_ollama_model "$model"
-  fi
-
   if ! _setup_cgroup; then
     echo "pi-harness: FATAL: cgroup enforcement required but setup failed" >&2
     echo "pi-harness: running unconstrained risks CPU/memory exhaustion on this hardware" >&2
@@ -152,7 +168,12 @@ cmd_run() {
     return 1
   fi
 
+  # Enroll Ollama before warmup so the model loads within the cgroup's CPU budget
   [ "$provider" = "ollama" ] && _enroll_ollama_in_cgroup
+
+  if [ "$provider" = "ollama" ]; then
+    _warmup_ollama_model "$model" || return 1
+  fi
 
   (
     # Capture $BASHPID before entering any pipeline: the pipeline creates a new

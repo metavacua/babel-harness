@@ -1,14 +1,49 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Differentiates by URL: MOCK_CURL_OPENROUTER_EXIT and MOCK_CURL_OLLAMA_EXIT
-# Fall back to MOCK_CURL_EXIT if specific var not set.
-if echo "$*" | grep -q "openrouter"; then
+# Testable seams:
+#   MOCK_CURL_OPENROUTER_EXIT / MOCK_CURL_OLLAMA_EXIT / MOCK_CURL_EXIT — exit codes
+#   MOCK_CALL_LOG — if set, each endpoint call is appended (one word per line)
+#   MOCK_OLLAMA_MODEL_LOADED — "1" → api/ps returns model immediately
+#   MOCK_OLLAMA_MODEL_NAME — model name for api/ps response (default: qwen2.5-coder:7b)
+#   MOCK_PS_LOADED_AFTER — api/ps returns loaded only after this many calls (uses counter file)
+#   MOCK_PS_COUNTER_FILE — counter state file for MOCK_PS_LOADED_AFTER
+
+args="$*"
+
+_log() { [ -n "${MOCK_CALL_LOG:-}" ] && echo "$1" >> "$MOCK_CALL_LOG"; }
+
+if echo "$args" | grep -q "openrouter"; then
+  _log "openrouter"
   exit "${MOCK_CURL_OPENROUTER_EXIT:-${MOCK_CURL_EXIT:-0}}"
-elif echo "$*" | grep -q "api/generate"; then
-  # Warmup endpoint — emit done:true so the warmup loop exits immediately
+
+elif echo "$args" | grep -q "api/generate"; then
+  _log "api/generate"
   ollama_exit="${MOCK_CURL_OLLAMA_EXIT:-${MOCK_CURL_EXIT:-0}}"
   [ "$ollama_exit" = "0" ] && echo '{"done":true}'
   exit "$ollama_exit"
+
+elif echo "$args" | grep -q "api/ps"; then
+  _log "api/ps"
+  model_name="${MOCK_OLLAMA_MODEL_NAME:-qwen2.5-coder:7b}"
+  loaded="${MOCK_OLLAMA_MODEL_LOADED:-0}"
+
+  # Stateful: become loaded after N calls
+  if [ -n "${MOCK_PS_LOADED_AFTER:-}" ] && [ -n "${MOCK_PS_COUNTER_FILE:-}" ]; then
+    count=0
+    [ -f "$MOCK_PS_COUNTER_FILE" ] && count=$(cat "$MOCK_PS_COUNTER_FILE")
+    count=$(( count + 1 ))
+    echo "$count" > "$MOCK_PS_COUNTER_FILE"
+    [ "$count" -ge "$MOCK_PS_LOADED_AFTER" ] && loaded=1
+  fi
+
+  if [ "$loaded" = "1" ]; then
+    echo "{\"models\":[{\"name\":\"$model_name\",\"size\":4000000000}]}"
+  else
+    echo '{"models":[]}'
+  fi
+  exit "${MOCK_CURL_OLLAMA_EXIT:-${MOCK_CURL_EXIT:-0}}"
+
 else
+  _log "ollama-other"
   exit "${MOCK_CURL_OLLAMA_EXIT:-${MOCK_CURL_EXIT:-0}}"
 fi

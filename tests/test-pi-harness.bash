@@ -55,7 +55,10 @@ rm -rf "$tmpdir"
 echo ""
 echo "--- 2: OpenRouter down, Ollama up → uses ollama ---"
 tmpdir=$(setup_cgroup_tmpdir)
-out=$(PATH="$MOCKS:$PATH" MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 CGROUP_ROOT="$tmpdir" \
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 \
+  MOCK_OLLAMA_MODEL_LOADED=1 \
+  CGROUP_ROOT="$tmpdir" \
   bash "$HARNESS" "write a hello function" 2>&1 || true)
 assert_contains "uses ollama provider" "provider=ollama" "$out"
 rm -rf "$tmpdir"
@@ -81,7 +84,10 @@ assert_contains "--status shows not running" "not running" "$out"
 echo ""
 echo "--- 6: --model override forces model ---"
 tmpdir=$(setup_cgroup_tmpdir)
-out=$(PATH="$MOCKS:$PATH" MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 CGROUP_ROOT="$tmpdir" \
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 \
+  MOCK_OLLAMA_MODEL_LOADED=1 MOCK_OLLAMA_MODEL_NAME="phi3:mini" \
+  CGROUP_ROOT="$tmpdir" \
   bash "$HARNESS" --model "ollama/phi3:mini" "task" 2>&1)
 assert_contains "--model override passes phi3:mini" "model=phi3:mini" "$out"
 rm -rf "$tmpdir"
@@ -109,6 +115,69 @@ else
   ((FAIL++)) || true
 fi
 rm -rf "$tmpdir"
+
+echo ""
+echo "--- 9: warmup skips api/generate when model already loaded ---"
+tmpdir=$(setup_cgroup_tmpdir)
+calllog=$(mktemp)
+# api/ps already returns the model — no generate should be needed
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 \
+  MOCK_OLLAMA_MODEL_LOADED=1 MOCK_OLLAMA_MODEL_NAME="qwen2.5-coder:7b" \
+  MOCK_CALL_LOG="$calllog" \
+  CGROUP_ROOT="$tmpdir" \
+  bash "$HARNESS" --model "ollama/qwen2.5-coder:7b" "task" 2>&1 || true)
+if grep -q "api/generate" "$calllog"; then
+  echo "  FAIL: api/generate was called when model was already loaded"
+  ((FAIL++)) || true
+else
+  echo "  PASS: warmup skipped api/generate (model already hot)"; ((PASS++)) || true
+fi
+rm -f "$calllog"; rm -rf "$tmpdir"
+
+echo ""
+echo "--- 10: warmup calls api/generate when model not loaded ---"
+tmpdir=$(setup_cgroup_tmpdir)
+calllog=$(mktemp)
+counterfile=$(mktemp)
+# api/ps returns loaded on 2nd call (after generate triggers the load)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 \
+  MOCK_OLLAMA_MODEL_LOADED=0 MOCK_OLLAMA_MODEL_NAME="qwen2.5-coder:7b" \
+  MOCK_PS_LOADED_AFTER=2 MOCK_PS_COUNTER_FILE="$counterfile" \
+  MOCK_CALL_LOG="$calllog" \
+  CGROUP_ROOT="$tmpdir" \
+  bash "$HARNESS" --model "ollama/qwen2.5-coder:7b" "task" 2>&1 || true)
+if grep -q "api/generate" "$calllog"; then
+  echo "  PASS: warmup called api/generate to load model"; ((PASS++)) || true
+else
+  echo "  FAIL: warmup did not call api/generate when model was not loaded"
+  ((FAIL++)) || true
+fi
+rm -f "$calllog" "$counterfile"; rm -rf "$tmpdir"
+
+echo ""
+echo "--- 11: warmup waits for api/ps to confirm model loaded ---"
+tmpdir=$(setup_cgroup_tmpdir)
+calllog=$(mktemp)
+counterfile=$(mktemp)
+# api/ps returns loaded only on 3rd call — warmup must poll
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 \
+  MOCK_OLLAMA_MODEL_LOADED=0 MOCK_OLLAMA_MODEL_NAME="qwen2.5-coder:7b" \
+  MOCK_PS_LOADED_AFTER=3 MOCK_PS_COUNTER_FILE="$counterfile" \
+  MOCK_CALL_LOG="$calllog" \
+  OLLAMA_WARMUP_POLL_INTERVAL=0 \
+  CGROUP_ROOT="$tmpdir" \
+  bash "$HARNESS" --model "ollama/qwen2.5-coder:7b" "task" 2>&1 || true)
+ps_calls=$(grep -c "api/ps" "$calllog" 2>/dev/null || echo 0)
+if [ "$ps_calls" -ge 3 ]; then
+  echo "  PASS: warmup polled api/ps $ps_calls times until model appeared"; ((PASS++)) || true
+else
+  echo "  FAIL: warmup made only $ps_calls api/ps call(s); expected >= 3"
+  ((FAIL++)) || true
+fi
+rm -f "$calllog" "$counterfile"; rm -rf "$tmpdir"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
