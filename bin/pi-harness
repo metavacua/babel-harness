@@ -8,6 +8,7 @@ OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/model
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 
 # --- Defaults ---
+CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-auto}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
 CGROUP_NAME="babel-harness"
@@ -57,8 +58,8 @@ _repair_ollama() {
 }
 
 _setup_cgroup() {
-  local cg_mem="/sys/fs/cgroup/memory/$CGROUP_NAME"
-  local cg_cpu="/sys/fs/cgroup/cpu/$CGROUP_NAME"
+  local cg_mem="${CGROUP_ROOT}/memory/$CGROUP_NAME"
+  local cg_cpu="${CGROUP_ROOT}/cpu/$CGROUP_NAME"
   sudo mkdir -p "$cg_mem" "$cg_cpu" 2>/dev/null || return 1
 
   # Memory — hard ceiling; prevents OOM on the shared 6.3 GB heap
@@ -84,8 +85,8 @@ _enroll_ollama_in_cgroup() {
   local ollama_pid
   ollama_pid=$(pgrep -f "ollama serve" 2>/dev/null | head -1) || return 0
   [ -z "$ollama_pid" ] && return 0
-  echo "$ollama_pid" | sudo tee "/sys/fs/cgroup/cpu/$CGROUP_NAME/cgroup.procs"    > /dev/null 2>&1 || true
-  echo "$ollama_pid" | sudo tee "/sys/fs/cgroup/memory/$CGROUP_NAME/cgroup.procs" > /dev/null 2>&1 || true
+  echo "$ollama_pid" | sudo tee "${CGROUP_ROOT}/cpu/$CGROUP_NAME/cgroup.procs"    > /dev/null 2>&1 || true
+  echo "$ollama_pid" | sudo tee "${CGROUP_ROOT}/memory/$CGROUP_NAME/cgroup.procs" > /dev/null 2>&1 || true
   echo "pi-harness: enrolled ollama PID $ollama_pid in $CGROUP_NAME cgroup" >&2
 }
 
@@ -153,8 +154,12 @@ cmd_run() {
     # independently of any external (systemd) resource configuration.
     [ "$provider" = "ollama" ] && _enroll_ollama_in_cgroup
     (
-      echo "$BASHPID" | sudo tee "/sys/fs/cgroup/cpu/$CGROUP_NAME/cgroup.procs"    > /dev/null 2>&1 || true
-      echo "$BASHPID" | sudo tee "/sys/fs/cgroup/memory/$CGROUP_NAME/cgroup.procs" > /dev/null 2>&1 || true
+      # Capture $BASHPID before entering any pipeline: piping echo "$BASHPID" would
+      # evaluate $BASHPID in the echo-subshell, giving a PID that exits before tee
+      # writes it, resulting in a silent "No such process" and no enrollment.
+      _self=$BASHPID
+      echo "$_self" | sudo tee "${CGROUP_ROOT}/cpu/$CGROUP_NAME/cgroup.procs"    > /dev/null 2>&1 || true
+      echo "$_self" | sudo tee "${CGROUP_ROOT}/memory/$CGROUP_NAME/cgroup.procs" > /dev/null 2>&1 || true
       exec "$PI_BIN" --provider "$provider" --model "$model" --print --mode json "$task"
     )
   else

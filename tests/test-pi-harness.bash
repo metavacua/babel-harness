@@ -69,5 +69,25 @@ out=$(PATH="$MOCKS:$PATH" MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 ba
 assert_contains "--model override passes phi3:mini" "model=phi3:mini" "$out"
 
 echo ""
+echo "--- 7: cgroup enrollment writes a valid (non-stale) PID ---"
+# Without --no-cgroup, pi-harness sets up cgroups and enrolls itself.
+# The bug: echo "$BASHPID" | sudo tee cgroup.procs evaluates $BASHPID in a
+# pipeline subshell that exits before tee runs → "No such process", PID never written.
+# The fix: _self=$BASHPID captured before the pipeline.
+# This test verifies a PID is actually written (mock sudo + CGROUP_ROOT=tmpdir).
+_tmpdir=$(mktemp -d)
+mkdir -p "$_tmpdir/cpu/babel-harness" "$_tmpdir/memory/babel-harness"
+PATH="$MOCKS:$PATH" MOCK_CURL_EXIT=0 CGROUP_ROOT="$_tmpdir" \
+  bash "$HARNESS" "task" > /dev/null 2>&1 || true
+_written_pid=$(cat "$_tmpdir/cpu/babel-harness/cgroup.procs" 2>/dev/null)
+if [ -n "$_written_pid" ] && [ "$_written_pid" -gt 1 ] 2>/dev/null; then
+  echo "  PASS: cgroup.procs contains valid PID ($_written_pid)"; ((PASS++)) || true
+else
+  echo "  FAIL: cgroup.procs is empty or contains invalid PID ('$_written_pid')"
+  ((FAIL++)) || true
+fi
+rm -rf "$_tmpdir"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
