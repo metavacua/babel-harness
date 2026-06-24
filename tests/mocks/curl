@@ -43,6 +43,15 @@ elif echo "$args" | grep -q "api/ps"; then
   fi
   exit "${MOCK_CURL_OLLAMA_EXIT:-${MOCK_CURL_EXIT:-0}}"
 
+# larql /v1/models health check
+elif echo "$args" | grep -q "v1/models" && ! echo "$args" | grep -q "openrouter"; then
+  if [ "${MOCK_CURL_LARQL_EXIT:-${MOCK_CURL_EXIT:-0}}" = "0" ]; then
+    echo '{"data":[{"id":"smollm2-360m"}]}'
+    exit 0
+  else
+    exit 1
+  fi
+
 else
   _log "ollama-other"
   exit "${MOCK_CURL_OLLAMA_EXIT:-${MOCK_CURL_EXIT:-0}}"

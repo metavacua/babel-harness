@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Mock goose binary — records provider env vars and returns a fixed response.
+# Records each invocation to $MOCK_CALL_LOG if set.
+if [ -n "${MOCK_CALL_LOG:-}" ]; then
+  echo "goose GOOSE_PROVIDER=${GOOSE_PROVIDER:-} GOOSE_MODEL=${GOOSE_MODEL:-} OPENAI_BASE_URL=${OPENAI_BASE_URL:-} args=$*" >> "$MOCK_CALL_LOG"
+fi
+echo '{"content":"mock goose response"}'
+exit "${MOCK_GOOSE_EXIT:-0}"

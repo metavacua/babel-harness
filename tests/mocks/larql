@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Mock larql binary — records invocations; "serve" exits immediately.
+if [ -n "${MOCK_CALL_LOG:-}" ]; then
+  echo "larql $*" >> "$MOCK_CALL_LOG"
+fi
+# For "serve": return immediately (simulate background serve start)
+if [ "${1:-}" = "serve" ]; then
+  exit 0
+fi
+exit "${MOCK_LARQL_EXIT:-0}"
