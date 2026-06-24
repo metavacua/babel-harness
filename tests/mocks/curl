@@ -45,6 +45,10 @@ elif echo "$args" | grep -q "api/ps"; then
 
 # larql /v1/models health check
 elif echo "$args" | grep -q "v1/models" && ! echo "$args" | grep -q "openrouter"; then
+  # MOCK_LARQL_RUNNING=0 forces health check failure (simulates larql not yet started)
+  if [ "${MOCK_LARQL_RUNNING:-}" = "0" ]; then
+    exit 1
+  fi
   if [ "${MOCK_CURL_LARQL_EXIT:-${MOCK_CURL_EXIT:-0}}" = "0" ]; then
     echo '{"data":[{"id":"smollm2-360m"}]}'
     exit 0
