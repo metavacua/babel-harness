@@ -97,5 +97,43 @@ assert_contains "goose uses openai provider (forced larql)" "GOOSE_PROVIDER=open
 rm -f "$calllog"
 
 echo ""
+echo "--- 5: GOOSE_MODE=auto is always set (headless safe) ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_EXIT=0 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" "write a hello function" 2>&1)
+assert_contains "GOOSE_MODE=auto set for openrouter path" "GOOSE_MODE=auto" "$(cat "$calllog")"
+rm -f "$calllog"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_CURL_LARQL_EXIT=0 \
+  MOCK_LARQL_RUNNING=1 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" "write a hello function" 2>&1)
+assert_contains "GOOSE_MODE=auto set for larql path" "GOOSE_MODE=auto" "$(cat "$calllog")"
+rm -f "$calllog"
+
+echo ""
+echo "--- 6: --model openrouter/MODEL passes stripped model to openrouter path ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_EXIT=0 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" --model "openrouter/qwen/qwen3-235b-a22b:free" "write a hello function" 2>&1)
+rc=$?
+assert_exit "exits 0" "0" "$rc"
+assert_contains "openrouter override uses openrouter provider" "GOOSE_PROVIDER=openrouter" "$(cat "$calllog")"
+assert_contains "openrouter override strips prefix from model name" "GOOSE_MODEL=qwen/qwen3-235b-a22b:free" "$(cat "$calllog")"
+rm -f "$calllog"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
