@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -euo pipefail
+
+# --- Testable seams ---
+PI_BIN="${PI_BIN:-$(command -v pi 2>/dev/null || echo "$HOME/.local/share/pi-node/current/bin/pi")}"
+OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/models}"
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+
+# --- Defaults ---
+OPENROUTER_MODEL="${OPENROUTER_MODEL:-openrouter/free}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
+CGROUP_NAME="babel-harness"
+CGROUP_MEMORY_BYTES=5368709120  # 5 GB
+
+usage() {
+  cat <<'EOF'
+Usage: pi-harness [OPTIONS] TASK
+
+Options:
+  --status        Report OpenRouter and Ollama health
+  --repair        Attempt to fix Ollama (restart service)
+  --model M       Override model, format: provider/model
+  --no-cgroup     Skip cgroup enforcement
+  -h, --help      Show this help
+EOF
+}
+
+_check_openrouter() {
+  curl -sf --max-time 3 "$OPENROUTER_CHECK_URL" > /dev/null 2>&1
+}
+
+_check_ollama() {
+  curl -sf --max-time 3 "$OLLAMA_URL" > /dev/null 2>&1
+}
+
+_repair_ollama() {
+  echo "pi-harness: restarting Ollama..." >&2
+  sudo systemctl restart ollama >&2 2>&1
+  sleep 2
+  _check_ollama
+}
+
+_setup_cgroup() {
+  local cg_mem="/sys/fs/cgroup/memory/$CGROUP_NAME"
+  sudo mkdir -p "$cg_mem" 2>/dev/null || return 1
+  echo "$CGROUP_MEMORY_BYTES" | sudo tee "$cg_mem/memory.limit_in_bytes" > /dev/null 2>&1 || return 1
+  echo "0" | sudo tee "$cg_mem/memory.swappiness" > /dev/null 2>&1 || true
+  return 0
+}
+
+cmd_status() {
+  if _check_openrouter; then
+    echo "OpenRouter: reachable"
+  else
+    echo "OpenRouter: unreachable"
+  fi
+  if _check_ollama; then
+    echo "Ollama:     running"
+  else
+    echo "Ollama:     not running"
+  fi
+}
+
+cmd_repair() {
+  if _repair_ollama; then
+    echo "pi-harness: Ollama is now running" >&2
+    return 0
+  else
+    echo "pi-harness: Ollama repair failed" >&2
+    return 1
+  fi
+}
+
+_select_provider_model() {
+  if _check_openrouter; then
+    echo "openrouter $OPENROUTER_MODEL"
+  elif _check_ollama; then
+    echo "ollama $OLLAMA_MODEL"
+  elif _repair_ollama; then
+    echo "ollama $OLLAMA_MODEL"
+  else
+    echo "none none"
+  fi
+}
+
+cmd_run() {
+  local task="$1"
+  local model_override="${2:-}"
+  local no_cgroup="${3:-0}"
+
+  local provider model
+  if [ -n "$model_override" ]; then
+    provider="${model_override%%/*}"
+    model="${model_override#*/}"
+  else
+    read -r provider model < <(_select_provider_model)
+    if [ "$provider" = "none" ]; then
+      echo '{"error":"no provider available — OpenRouter unreachable and Ollama failed to start"}' >&2
+      return 1
+    fi
+  fi
+
+  echo "pi-harness: provider=$provider model=$model" >&2
+
+  if [ "$no_cgroup" = "0" ] && _setup_cgroup; then
+    local cg_procs="/sys/fs/cgroup/memory/$CGROUP_NAME/cgroup.procs"
+    (
+      echo "$BASHPID" | sudo tee "$cg_procs" > /dev/null 2>&1 || true
+      exec "$PI_BIN" --provider "$provider" --model "$model" --print --mode json "$task"
+    )
+  else
+    [ "$no_cgroup" = "0" ] && echo "pi-harness: cgroup setup failed, proceeding without limit" >&2 || true
+    "$PI_BIN" --provider "$provider" --model "$model" --print --mode json "$task"
+  fi
+}
+
+# --- Argument parsing ---
+MODEL_OVERRIDE=""
+NO_CGROUP=0
+TASK=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --status)    cmd_status; exit 0 ;;
+    --repair)    cmd_repair; exit $? ;;
+    --model)     MODEL_OVERRIDE="$2"; shift 2 ;;
+    --no-cgroup) NO_CGROUP=1; shift ;;
+    -h|--help)   usage; exit 0 ;;
+    -*)          echo "pi-harness: unknown option: $1" >&2; usage; exit 1 ;;
+    *)           TASK="$1"; shift ;;
+  esac
+done
+
+if [ -z "$TASK" ]; then
+  echo "pi-harness: TASK argument required" >&2
+  usage
+  exit 1
+fi
+
+cmd_run "$TASK" "$MODEL_OVERRIDE" "$NO_CGROUP"

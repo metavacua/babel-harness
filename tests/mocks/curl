@@ -1,3 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-exit "${MOCK_CURL_EXIT:-0}"
+# Differentiates by URL: MOCK_CURL_OPENROUTER_EXIT and MOCK_CURL_OLLAMA_EXIT
+# Fall back to MOCK_CURL_EXIT if specific var not set.
+if echo "$*" | grep -q "openrouter"; then
+  exit "${MOCK_CURL_OPENROUTER_EXIT:-${MOCK_CURL_EXIT:-0}}"
+else
+  exit "${MOCK_CURL_OLLAMA_EXIT:-${MOCK_CURL_EXIT:-0}}"
+fi

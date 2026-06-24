@@ -43,7 +43,7 @@ assert_contains "uses openrouter provider" "provider=openrouter" "$out"
 
 echo ""
 echo "--- 2: OpenRouter down, Ollama up → uses ollama ---"
-out=$(PATH="$MOCKS:$PATH" MOCK_CURL_EXIT=1 MOCK_OLLAMA_EXIT=0 bash "$HARNESS" --no-cgroup "write a hello function" 2>&1 || true)
+out=$(PATH="$MOCKS:$PATH" MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 bash "$HARNESS" --no-cgroup "write a hello function" 2>&1 || true)
 assert_contains "uses ollama provider" "provider=ollama" "$out"
 
 echo ""
