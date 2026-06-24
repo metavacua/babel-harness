@@ -4,6 +4,11 @@
 # Fall back to MOCK_CURL_EXIT if specific var not set.
 if echo "$*" | grep -q "openrouter"; then
   exit "${MOCK_CURL_OPENROUTER_EXIT:-${MOCK_CURL_EXIT:-0}}"
+elif echo "$*" | grep -q "api/generate"; then
+  # Warmup endpoint — emit done:true so the warmup loop exits immediately
+  ollama_exit="${MOCK_CURL_OLLAMA_EXIT:-${MOCK_CURL_EXIT:-0}}"
+  [ "$ollama_exit" = "0" ] && echo '{"done":true}'
+  exit "$ollama_exit"
 else
   exit "${MOCK_CURL_OLLAMA_EXIT:-${MOCK_CURL_EXIT:-0}}"
 fi

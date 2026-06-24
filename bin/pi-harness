@@ -8,8 +8,9 @@ OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/model
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 
 # --- Defaults ---
-OPENROUTER_MODEL="${OPENROUTER_MODEL:-openrouter/free}"
+OPENROUTER_MODEL="${OPENROUTER_MODEL:-auto}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
+OLLAMA_WARMUP_TIMEOUT="${OLLAMA_WARMUP_TIMEOUT:-1200}"  # 20 min — CPU load is slow
 CGROUP_NAME="babel-harness"
 CGROUP_MEMORY_BYTES=5368709120  # 5 GB
 
@@ -32,6 +33,25 @@ _check_openrouter() {
 
 _check_ollama() {
   curl -sf --max-time 3 "$OLLAMA_URL" > /dev/null 2>&1
+}
+
+_warmup_ollama_model() {
+  local model="$1"
+  local deadline=$(( $(date +%s) + OLLAMA_WARMUP_TIMEOUT ))
+  echo "pi-harness: warming up $model (CPU load — may take up to ${OLLAMA_WARMUP_TIMEOUT}s)..." >&2
+  # Send a minimal generation request to trigger model load; poll until it responds or deadline
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    local resp
+    resp=$(curl -sf --max-time 30 "$OLLAMA_URL/api/generate" \
+      -d "{\"model\":\"$model\",\"prompt\":\"hi\",\"stream\":false,\"options\":{\"num_predict\":1}}" 2>/dev/null)
+    if echo "$resp" | grep -q '"done":true'; then
+      echo "pi-harness: $model ready" >&2
+      return 0
+    fi
+    sleep 10
+  done
+  echo "pi-harness: $model warmup timed out after ${OLLAMA_WARMUP_TIMEOUT}s" >&2
+  return 1
 }
 
 _repair_ollama() {
@@ -102,6 +122,11 @@ cmd_run() {
   fi
 
   echo "pi-harness: provider=$provider model=$model" >&2
+
+  # Warm up the local model before invoking Pi (CPU load can exceed Pi's internal timeout)
+  if [ "$provider" = "ollama" ]; then
+    _warmup_ollama_model "$model" || return 1
+  fi
 
   if [ "$no_cgroup" = "0" ] && _setup_cgroup; then
     local cg_procs="/sys/fs/cgroup/memory/$CGROUP_NAME/cgroup.procs"

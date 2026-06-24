@@ -65,7 +65,7 @@ assert_contains "--status shows not running" "not running" "$out"
 
 echo ""
 echo "--- 6: --model override forces model ---"
-out=$(PATH="$MOCKS:$PATH" MOCK_CURL_EXIT=1 bash "$HARNESS" --no-cgroup --model "ollama/phi3:mini" "task" 2>&1)
+out=$(PATH="$MOCKS:$PATH" MOCK_CURL_OPENROUTER_EXIT=1 MOCK_CURL_OLLAMA_EXIT=0 bash "$HARNESS" --no-cgroup --model "ollama/phi3:mini" "task" 2>&1)
 assert_contains "--model override passes phi3:mini" "model=phi3:mini" "$out"
 
 echo ""
