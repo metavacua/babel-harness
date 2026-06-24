@@ -53,6 +53,8 @@ _larql_find_server_pid() {
 
 _larql_cleanup() {
   [ -n "${_LARQL_SERVER_PID:-}" ] && kill "$_LARQL_SERVER_PID" 2>/dev/null || true
+  # kill the launcher too in case it is still waiting for larql-server to exit
+  [ -n "${_LARQL_LAUNCHER_PID:-}" ] && kill "$_LARQL_LAUNCHER_PID" 2>/dev/null || true
 }
 trap '_larql_cleanup' EXIT
 
@@ -61,7 +63,8 @@ _start_larql_server() {
   echo "coding-agent: starting larql serve $vindex on port $LARQL_PORT..." >&2
   echo "coding-agent: larql-server log: $LARQL_LOG_FILE" >&2
   "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" >> "$LARQL_LOG_FILE" 2>&1 &
-  _LARQL_SERVER_PID=$!
+  _LARQL_LAUNCHER_PID=$!
+  _LARQL_SERVER_PID=$_LARQL_LAUNCHER_PID
   # larql-server pre-loads weights on startup; poll up to LARQL_START_TIMEOUT seconds
   local deadline=$(( $(date +%s) + LARQL_START_TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
