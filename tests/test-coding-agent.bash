@@ -22,6 +22,18 @@ assert_contains() {
   fi
 }
 
+assert_pass() {
+  local desc="$1"
+  echo "  PASS: $desc"; ((PASS++)) || true
+}
+
+assert_fail() {
+  local desc="$1" reason="$2"
+  echo "  FAIL: $desc"
+  echo "    reason: $reason"
+  ((FAIL++)) || true
+}
+
 assert_exit() {
   local desc="$1" expected="$2" actual="$3"
   if [ "$expected" = "$actual" ]; then
@@ -169,6 +181,32 @@ out=$(PATH="$MOCKS:$PATH" \
 rc=$?
 assert_exit "times out when goose exceeds LARQL_INFERENCE_TIMEOUT" "124" "$rc"
 rm -f "$calllog"
+
+echo ""
+echo "--- 9: larql-server PID is killed when coding-agent exits (issue #2) ---"
+pid_file=$(mktemp)
+counter_file=$(mktemp)
+calllog=$(mktemp)
+# Mock larql serve stays alive (writes PID); poll succeeds on 2nd health check call
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_LARQL_RUNNING_AFTER=2 \
+  MOCK_LARQL_COUNTER_FILE="$counter_file" \
+  MOCK_CALL_LOG="$calllog" \
+  MOCK_LARQL_SERVE_STAY_ALIVE=1 \
+  MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" "write a hello function" 2>&1 || true)
+server_pid=$(cat "$pid_file" 2>/dev/null || echo "")
+# After coding-agent exits, the larql-server PID must be dead
+if [ -n "$server_pid" ] && kill -0 "$server_pid" 2>/dev/null; then
+  kill "$server_pid" 2>/dev/null || true  # clean up for test isolation
+  assert_fail "larql-server PID killed on coding-agent exit" "PID $server_pid still alive after exit"
+else
+  assert_pass "larql-server PID killed on coding-agent exit"
+fi
+rm -f "$calllog" "$pid_file" "$counter_file"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
