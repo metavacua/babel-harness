@@ -168,7 +168,7 @@ echo ""
 echo "--- 8: LARQL_INFERENCE_TIMEOUT seam controls goose call timeout (issue #3) ---"
 calllog=$(mktemp)
 # A 1s timeout with a mock goose that sleeps 2s should cause exit 124
-out=$(PATH="$MOCKS:$PATH" \
+PATH="$MOCKS:$PATH" \
   MOCK_CURL_OPENROUTER_EXIT=1 \
   MOCK_CURL_LARQL_EXIT=0 \
   MOCK_LARQL_RUNNING=1 \
@@ -177,7 +177,7 @@ out=$(PATH="$MOCKS:$PATH" \
   LARQL_BIN="$MOCKS/larql" \
   MOCK_GOOSE_SLEEP=2 \
   LARQL_INFERENCE_TIMEOUT=1 \
-  bash "$AGENT" "write a hello function" 2>&1)
+  bash "$AGENT" "write a hello function" > /dev/null 2>&1
 rc=$?
 assert_exit "times out when goose exceeds LARQL_INFERENCE_TIMEOUT" "124" "$rc"
 rm -f "$calllog"

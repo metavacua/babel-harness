@@ -17,9 +17,8 @@ LARQL_START_TIMEOUT="${LARQL_START_TIMEOUT:-30}"
 LARQL_LOG_FILE="${LARQL_LOG_FILE:-/tmp/larql-server-${LARQL_PORT}.log}"
 # timeout for a single Goose inference call; 124 = timeout exit code
 LARQL_INFERENCE_TIMEOUT="${LARQL_INFERENCE_TIMEOUT:-120}"
-# how to find the actual server PID after startup (injectable for testing)
-# default: look for the process listening on LARQL_PORT via ss
-LARQL_SERVER_FINDER="${LARQL_SERVER_FINDER:-}"
+# injectable PID lookup for testing; production default uses ss (Linux/iproute2 only)
+# inject LARQL_SERVER_FINDER to override in tests or on non-Linux hosts
 
 usage() {
   cat <<'EOF'
@@ -43,20 +42,20 @@ _check_larql() {
 }
 
 _larql_find_server_pid() {
-  if [ -n "$LARQL_SERVER_FINDER" ]; then
+  if [ -n "${LARQL_SERVER_FINDER:-}" ]; then
     eval "$LARQL_SERVER_FINDER" 2>/dev/null || true
   else
     # larql exits after spawning larql-server; find the process listening on the port
-    ss -tlpn "sport = :${LARQL_PORT}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true
+    ss -tlpn "sport = :${LARQL_PORT}" 2>/dev/null \
+      | awk -F'pid=' 'NF>1{split($2,a,","); print a[1]; exit}' || true
   fi
 }
 
 _larql_cleanup() {
+  # kill server first (the long-lived process), then launcher (may still be waiting)
   [ -n "${_LARQL_SERVER_PID:-}" ] && kill "$_LARQL_SERVER_PID" 2>/dev/null || true
-  # kill the launcher too in case it is still waiting for larql-server to exit
   [ -n "${_LARQL_LAUNCHER_PID:-}" ] && kill "$_LARQL_LAUNCHER_PID" 2>/dev/null || true
 }
-trap '_larql_cleanup' EXIT
 
 _start_larql_server() {
   local vindex="$1"
@@ -64,7 +63,7 @@ _start_larql_server() {
   echo "coding-agent: larql-server log: $LARQL_LOG_FILE" >&2
   "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" >> "$LARQL_LOG_FILE" 2>&1 &
   _LARQL_LAUNCHER_PID=$!
-  _LARQL_SERVER_PID=$_LARQL_LAUNCHER_PID
+  trap '_larql_cleanup' EXIT
   # larql-server pre-loads weights on startup; poll up to LARQL_START_TIMEOUT seconds
   local deadline=$(( $(date +%s) + LARQL_START_TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
