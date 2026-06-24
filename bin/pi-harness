@@ -47,23 +47,27 @@ _warmup_ollama_model() {
     return 0
   fi
 
-  # Trigger model load with no inference — keeps Ollama within the already-established cgroup
+  # Trigger model load in background — connection must stay open until Ollama finishes
+  # loading; if the client disconnects first, Ollama aborts the load entirely.
   echo "pi-harness: loading $model (CPU-only; may take several minutes)..." >&2
-  curl -sf --max-time 10 "$OLLAMA_URL/api/generate" \
+  curl -sf "$OLLAMA_URL/api/generate" \
     -d "{\"model\":\"$model\",\"prompt\":\"\",\"stream\":false,\"options\":{\"num_predict\":0}}" \
-    > /dev/null 2>&1 || true
+    > /dev/null 2>&1 &
+  local load_pid=$!
 
-  # Poll until the model appears in api/ps, confirming the runner is live
+  # Poll until the runner appears in api/ps, then release the generate connection
   local deadline=$(( $(date +%s) + OLLAMA_WARMUP_TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     ps_resp=$(curl -sf --max-time 5 "$OLLAMA_URL/api/ps" 2>/dev/null)
     if echo "$ps_resp" | grep -q "\"$model\""; then
+      kill "$load_pid" 2>/dev/null || true
       echo "pi-harness: $model ready" >&2
       return 0
     fi
     sleep "$OLLAMA_WARMUP_POLL_INTERVAL"
   done
 
+  kill "$load_pid" 2>/dev/null || true
   echo "pi-harness: timeout after ${OLLAMA_WARMUP_TIMEOUT}s waiting for $model to load" >&2
   return 1
 }
