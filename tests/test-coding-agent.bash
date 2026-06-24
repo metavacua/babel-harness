@@ -67,18 +67,19 @@ rm -f "$calllog"
 echo ""
 echo "--- 3: larql not running → coding-agent starts larql serve ---"
 calllog=$(mktemp)
-# MOCK_CURL_LARQL_EXIT=1 first call fails (not running), then 0 after serve starts
-# We simulate this by making larql respond to serve and the second curl check pass
+counterfile=$(mktemp)
+# /v1/models: call 1 fails (count=1 < 2), call 2 succeeds (count=2 >= 2)
+# This simulates: initial check fails → agent starts larql serve → poll passes
 out=$(PATH="$MOCKS:$PATH" \
   MOCK_CURL_OPENROUTER_EXIT=1 \
-  MOCK_CURL_LARQL_EXIT=0 \
-  MOCK_LARQL_RUNNING=0 \
+  MOCK_LARQL_RUNNING_AFTER=2 \
+  MOCK_LARQL_COUNTER_FILE="$counterfile" \
   MOCK_CALL_LOG="$calllog" \
   GOOSE_BIN="$MOCKS/goose" \
   LARQL_BIN="$MOCKS/larql" \
   bash "$AGENT" "write a hello function" 2>&1 || true)
 assert_contains "larql serve invoked" "larql serve" "$(cat "$calllog")"
-rm -f "$calllog"
+rm -f "$calllog" "$counterfile"
 
 echo ""
 echo "--- 4: --model larql/smollm2-360m forces larql path even if OpenRouter up ---"

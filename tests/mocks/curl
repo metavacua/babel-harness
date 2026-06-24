@@ -45,6 +45,20 @@ elif echo "$args" | grep -q "api/ps"; then
 
 # larql /v1/models health check
 elif echo "$args" | grep -q "v1/models" && ! echo "$args" | grep -q "openrouter"; then
+  _log "v1/models"
+  # Stateful: become running after N health-check calls (mirrors MOCK_PS_LOADED_AFTER)
+  if [ -n "${MOCK_LARQL_RUNNING_AFTER:-}" ] && [ -n "${MOCK_LARQL_COUNTER_FILE:-}" ]; then
+    count=0
+    [ -f "$MOCK_LARQL_COUNTER_FILE" ] && count=$(cat "$MOCK_LARQL_COUNTER_FILE")
+    count=$(( count + 1 ))
+    echo "$count" > "$MOCK_LARQL_COUNTER_FILE"
+    if [ "$count" -ge "$MOCK_LARQL_RUNNING_AFTER" ]; then
+      echo '{"data":[{"id":"smollm2-360m"}]}'
+      exit 0
+    else
+      exit 1
+    fi
+  fi
   # MOCK_LARQL_RUNNING=0 forces health check failure (simulates larql not yet started)
   if [ "${MOCK_LARQL_RUNNING:-}" = "0" ]; then
     exit 1
