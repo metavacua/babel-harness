@@ -53,7 +53,7 @@ _start_larql_server() {
 _run_goose_openrouter() {
   local model="$1" task="$2"
   echo "coding-agent: provider=openrouter model=$model" >&2
-  GOOSE_PROVIDER=openrouter GOOSE_MODEL="$model" \
+  GOOSE_PROVIDER=openrouter GOOSE_MODEL="$model" GOOSE_MODE=auto \
     "$GOOSE_BIN" run -t "$task"
 }
 
@@ -64,6 +64,7 @@ _run_goose_larql() {
     OPENAI_BASE_URL="http://localhost:${LARQL_PORT}/v1" \
     OPENAI_API_KEY=larql \
     GOOSE_MODEL="$vindex" \
+    GOOSE_MODE=auto \
     "$GOOSE_BIN" run -t "$task"
 }
 
