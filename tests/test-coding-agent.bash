@@ -135,5 +135,41 @@ assert_contains "openrouter override strips prefix from model name" "GOOSE_MODEL
 rm -f "$calllog"
 
 echo ""
+echo "--- 7: larql-server log path is printed to stderr (issue #1) ---"
+logfile=$(mktemp)
+calllog=$(mktemp)
+counterfile=$(mktemp)
+# Initial larql check fails, _start_larql_server is called (prints log path), poll then passes
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_LARQL_RUNNING_AFTER=2 \
+  MOCK_LARQL_COUNTER_FILE="$counterfile" \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  LARQL_LOG_FILE="$logfile" \
+  bash "$AGENT" "write a hello function" 2>&1 || true)
+assert_contains "stderr reports larql-server log path" "larql-server log: $logfile" "$out"
+rm -f "$calllog" "$logfile" "$counterfile"
+
+echo ""
+echo "--- 8: LARQL_INFERENCE_TIMEOUT seam controls goose call timeout (issue #3) ---"
+calllog=$(mktemp)
+# A 1s timeout with a mock goose that sleeps 2s should cause exit 124
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_CURL_LARQL_EXIT=0 \
+  MOCK_LARQL_RUNNING=1 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  MOCK_GOOSE_SLEEP=2 \
+  LARQL_INFERENCE_TIMEOUT=1 \
+  bash "$AGENT" "write a hello function" 2>&1)
+rc=$?
+assert_exit "times out when goose exceeds LARQL_INFERENCE_TIMEOUT" "124" "$rc"
+rm -f "$calllog"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

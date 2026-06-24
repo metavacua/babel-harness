@@ -6,5 +6,6 @@ set -euo pipefail
 if [ -n "${MOCK_CALL_LOG:-}" ]; then
   echo "goose GOOSE_PROVIDER=${GOOSE_PROVIDER:-} GOOSE_MODEL=${GOOSE_MODEL:-} GOOSE_MODE=${GOOSE_MODE:-} OPENAI_BASE_URL=${OPENAI_BASE_URL:-} args=$*" >> "$MOCK_CALL_LOG"
 fi
+[ -n "${MOCK_GOOSE_SLEEP:-}" ] && sleep "$MOCK_GOOSE_SLEEP"
 echo '{"content":"mock goose response"}'
 exit "${MOCK_GOOSE_EXIT:-0}"

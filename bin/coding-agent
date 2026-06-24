@@ -14,6 +14,9 @@ OPENROUTER_MODEL="${OPENROUTER_MODEL:-qwen/qwen3-coder:free}"
 GOOSE_BIN="${GOOSE_BIN:-goose}"
 # larql-server pre-loads weights: ~16s for smollm2-360m (vs 40min for 7B via Ollama)
 LARQL_START_TIMEOUT="${LARQL_START_TIMEOUT:-30}"
+LARQL_LOG_FILE="${LARQL_LOG_FILE:-/tmp/larql-server-${LARQL_PORT}.log}"
+# timeout for a single Goose inference call; 124 = timeout exit code
+LARQL_INFERENCE_TIMEOUT="${LARQL_INFERENCE_TIMEOUT:-120}"
 
 usage() {
   cat <<'EOF'
@@ -39,7 +42,8 @@ _check_larql() {
 _start_larql_server() {
   local vindex="$1"
   echo "coding-agent: starting larql serve $vindex on port $LARQL_PORT..." >&2
-  "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" > /dev/null 2>&1 &
+  echo "coding-agent: larql-server log: $LARQL_LOG_FILE" >&2
+  "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" >> "$LARQL_LOG_FILE" 2>&1 &
   local server_pid=$!
   # larql-server pre-loads weights on startup; poll up to LARQL_START_TIMEOUT seconds
   local deadline=$(( $(date +%s) + LARQL_START_TIMEOUT ))
@@ -71,6 +75,7 @@ _run_goose_larql() {
     OPENAI_API_KEY=larql \
     GOOSE_MODEL="$vindex" \
     GOOSE_MODE=auto \
+    timeout "$LARQL_INFERENCE_TIMEOUT" \
     "$GOOSE_BIN" run -t "$task"
 }
 
