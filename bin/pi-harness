@@ -10,7 +10,6 @@ OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 # --- Defaults ---
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-auto}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
-OLLAMA_WARMUP_TIMEOUT="${OLLAMA_WARMUP_TIMEOUT:-1200}"  # 20 min — CPU load is slow
 CGROUP_NAME="babel-harness"
 CGROUP_MEMORY_BYTES=5368709120  # 5 GB
 
@@ -37,21 +36,16 @@ _check_ollama() {
 
 _warmup_ollama_model() {
   local model="$1"
-  local deadline=$(( $(date +%s) + OLLAMA_WARMUP_TIMEOUT ))
-  echo "pi-harness: warming up $model (CPU load — may take up to ${OLLAMA_WARMUP_TIMEOUT}s)..." >&2
-  # Send a minimal generation request to trigger model load; poll until it responds or deadline
-  while [ "$(date +%s)" -lt "$deadline" ]; do
-    local resp
-    resp=$(curl -sf --max-time 30 "$OLLAMA_URL/api/generate" \
-      -d "{\"model\":\"$model\",\"prompt\":\"hi\",\"stream\":false,\"options\":{\"num_predict\":1}}" 2>/dev/null)
-    if echo "$resp" | grep -q '"done":true'; then
-      echo "pi-harness: $model ready" >&2
-      return 0
-    fi
-    sleep 10
-  done
-  echo "pi-harness: $model warmup timed out after ${OLLAMA_WARMUP_TIMEOUT}s" >&2
-  return 1
+  # Check if the model is already hot in Ollama without triggering inference
+  local ps_resp
+  ps_resp=$(curl -sf --max-time 5 "$OLLAMA_URL/api/ps" 2>/dev/null)
+  if echo "$ps_resp" | grep -q "\"$model\""; then
+    echo "pi-harness: $model already loaded" >&2
+  else
+    echo "pi-harness: $model not yet loaded — Ollama will load it on first Pi request" >&2
+    echo "pi-harness: (CPU-only load may take several minutes; Pi result will arrive after it completes)" >&2
+  fi
+  return 0
 }
 
 _repair_ollama() {
