@@ -43,7 +43,8 @@ _check_larql() {
 }
 
 _larql_find_server_pid() {
-  if [ -n "${LARQL_SERVER_FINDER:-}" ]; then
+  # LARQL_TEST_MODE=1 activates eval-based injection; never set in production.
+  if [ "${LARQL_TEST_MODE:-0}" = "1" ] && [ -n "${LARQL_SERVER_FINDER:-}" ]; then
     eval "$LARQL_SERVER_FINDER" 2>/dev/null || true
   else
     # larql exits after spawning larql-server; find the process listening on the port
@@ -60,8 +61,13 @@ _enroll_larql_in_cgroup() {
   local cg_cpu="${CGROUP_ROOT}/cpu/${CGROUP_NAME}"
   [ -d "$cg_mem" ] || return 0  # cgroup not set up; skip silently
   echo "$pid" | sudo tee "${cg_mem}/cgroup.procs" > /dev/null 2>&1 || true
-  echo "$pid" | sudo tee "${cg_cpu}/cgroup.procs" > /dev/null 2>&1 || true
-  echo "coding-agent: enrolled larql-server PID $pid in $CGROUP_NAME cgroup" >&2
+  # cpu cgroup is optional — some cgroup v1 setups only have memory controller
+  if [ -d "$cg_cpu" ]; then
+    echo "$pid" | sudo tee "${cg_cpu}/cgroup.procs" > /dev/null 2>&1 || true
+    echo "coding-agent: enrolled larql-server PID $pid in $CGROUP_NAME cgroup (memory+cpu)" >&2
+  else
+    echo "coding-agent: enrolled larql-server PID $pid in $CGROUP_NAME cgroup (memory only; cpu cgroup absent)" >&2
+  fi
 }
 
 _larql_cleanup() {
@@ -138,6 +144,7 @@ _run_goose_openrouter() {
 _run_goose_larql() {
   local vindex="$1" task="$2"
   echo "coding-agent: provider=larql (openai-compat) model=$vindex" >&2
+  # timeout must be INSIDE _run_goose_call (not wrapping it) so PIPESTATUS[0] is the goose exit
   GOOSE_PROVIDER=openai \
     OPENAI_BASE_URL="http://localhost:${LARQL_PORT}/v1" \
     OPENAI_API_KEY=larql \

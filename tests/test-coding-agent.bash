@@ -197,6 +197,7 @@ out=$(PATH="$MOCKS:$PATH" \
   MOCK_CALL_LOG="$calllog" \
   MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
   LARQL_SERVER_FINDER="cat $pid_file" \
+  LARQL_TEST_MODE=1 \
   GOOSE_BIN="$MOCKS/goose" \
   LARQL_BIN="$MOCKS/larql" \
   bash "$AGENT" "write a hello function" 2>&1 || true)
@@ -254,6 +255,7 @@ out=$(PATH="$MOCKS:$PATH" \
   MOCK_CALL_LOG="$calllog" \
   MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
   LARQL_SERVER_FINDER="cat $pid_file" \
+  LARQL_TEST_MODE=1 \
   GOOSE_BIN="$MOCKS/goose" \
   LARQL_BIN="$MOCKS/larql" \
   CGROUP_ROOT="/nonexistent/cgroup" \
@@ -324,6 +326,31 @@ rc=$?
 assert_exit "exits 0 on --help" "0" "$rc"
 assert_contains "prints usage header" "Usage:" "$out"
 assert_contains "mentions --model option" "--model" "$out"
+
+echo ""
+echo "--- 19: LARQL_SERVER_FINDER is ignored when LARQL_TEST_MODE is unset ---"
+pid_file=$(mktemp)
+counter_file=$(mktemp)
+calllog=$(mktemp)
+injected_flag=$(mktemp)
+rm -f "$injected_flag"  # remove so we can detect if eval'd touch re-creates it
+# LARQL_SERVER_FINDER set but LARQL_TEST_MODE not set → should not eval
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_LARQL_RUNNING_AFTER=1 \
+  MOCK_LARQL_COUNTER_FILE="$counter_file" \
+  MOCK_CALL_LOG="$calllog" \
+  MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
+  LARQL_SERVER_FINDER="touch $injected_flag && cat $pid_file" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" "write a hello function" 2>&1 || true)
+if [ -f "$injected_flag" ]; then
+  assert_fail "LARQL_SERVER_FINDER not eval'd without LARQL_TEST_MODE" "eval ran despite LARQL_TEST_MODE not being set"
+else
+  assert_pass "LARQL_SERVER_FINDER ignored when LARQL_TEST_MODE unset"
+fi
+rm -f "$calllog" "$pid_file" "$counter_file" "$injected_flag"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
