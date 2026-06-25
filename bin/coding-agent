@@ -20,6 +20,10 @@ LARQL_LOG_FILE="${LARQL_LOG_FILE:-/tmp/larql-server-${LARQL_PORT}.log}"
 LARQL_INFERENCE_TIMEOUT="${LARQL_INFERENCE_TIMEOUT:-120}"
 # injectable PID lookup for testing; production default uses ss (Linux/iproute2 only)
 # inject LARQL_SERVER_FINDER to override in tests or on non-Linux hosts
+CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
+CGROUP_NAME="${CGROUP_NAME:-babel-harness}"
+# set LARQL_NO_CGROUP=1 to skip cgroup enrollment (tests, CI, non-Linux)
+LARQL_NO_CGROUP="${LARQL_NO_CGROUP:-0}"
 
 usage() {
   cat <<'EOF'
@@ -48,6 +52,15 @@ _larql_find_server_pid() {
   fi
 }
 
+_enroll_larql_in_cgroup() {
+  local pid="$1"
+  [ "$LARQL_NO_CGROUP" = "1" ] && return 0
+  [ -z "$pid" ] && return 0
+  echo "$pid" | sudo tee "${CGROUP_ROOT}/memory/${CGROUP_NAME}/cgroup.procs" > /dev/null 2>&1 || true
+  echo "$pid" | sudo tee "${CGROUP_ROOT}/cpu/${CGROUP_NAME}/cgroup.procs"    > /dev/null 2>&1 || true
+  echo "coding-agent: enrolled larql-server PID $pid in $CGROUP_NAME cgroup" >&2
+}
+
 _larql_cleanup() {
   # kill server first (the long-lived process), then launcher (may still be waiting)
   [ -n "${_LARQL_SERVER_PID:-}" ] && kill "$_LARQL_SERVER_PID" 2>/dev/null || true
@@ -69,6 +82,7 @@ _start_larql_server() {
       # larql exits immediately after spawning larql-server; find the actual server PID
       _LARQL_SERVER_PID=$(_larql_find_server_pid)
       echo "coding-agent: larql serve ready (PID ${_LARQL_SERVER_PID:-unknown})" >&2
+      _enroll_larql_in_cgroup "${_LARQL_SERVER_PID:-}"
       return 0
     fi
     sleep 0.2
