@@ -12,6 +12,7 @@ LARQL_PORT="${LARQL_PORT:-8080}"
 LARQL_VINDEX="${LARQL_VINDEX:-smollm2-360m}"
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-qwen/qwen3-coder:free}"
 GOOSE_BIN="${GOOSE_BIN:-goose}"
+source "$(dirname "$0")/../lib/harness-common.sh"
 # larql-server pre-loads weights: ~16s for smollm2-360m (vs 40min for 7B via Ollama)
 LARQL_START_TIMEOUT="${LARQL_START_TIMEOUT:-30}"
 LARQL_LOG_FILE="${LARQL_LOG_FILE:-/tmp/larql-server-${LARQL_PORT}.log}"
@@ -31,10 +32,6 @@ Options:
 
 Note: quote the TASK string to preserve spaces: coding-agent "write a hello function"
 EOF
-}
-
-_check_openrouter() {
-  curl -sf --max-time 3 "$OPENROUTER_CHECK_URL" > /dev/null 2>&1
 }
 
 _check_larql() {
