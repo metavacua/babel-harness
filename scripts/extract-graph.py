@@ -401,7 +401,7 @@ def write_larql_json(edges: list[tuple], out: Path) -> None:
 
 def write_ntriples(edges: list[tuple], out: Path) -> None:
     """Write N-Triples canonical graph representation."""
-    BASE = "https://babel-harness.metavacua.dev/graph#"
+    BASE = "https://github.com/metavacua/babel-harness#"
     triples = []
     for frm, rel, to, _conf in edges:
         s = f"<{BASE}{frm.replace(' ', '_')}>"
