@@ -62,8 +62,9 @@ _start_larql_server() {
   _LARQL_LAUNCHER_PID=$!
   trap '_larql_cleanup' EXIT
   # larql-server pre-loads weights on startup; poll up to LARQL_START_TIMEOUT seconds
-  local deadline=$(( $(date +%s) + LARQL_START_TIMEOUT ))
-  while [ "$(date +%s)" -lt "$deadline" ]; do
+  local ticks=$(( LARQL_START_TIMEOUT * 5 ))
+  local i=0 _launcher_reaped=0
+  while [ $i -lt $ticks ]; do
     if _check_larql; then
       # larql exits immediately after spawning larql-server; find the actual server PID
       _LARQL_SERVER_PID=$(_larql_find_server_pid)
@@ -71,6 +72,18 @@ _start_larql_server() {
       return 0
     fi
     sleep 0.2
+    i=$(( i + 1 ))
+    # After sleep, bash reaps any exited background jobs; check if launcher failed
+    if [ "$_launcher_reaped" = "0" ] && [ -n "${_LARQL_LAUNCHER_PID:-}" ] && \
+       ! kill -0 "$_LARQL_LAUNCHER_PID" 2>/dev/null; then
+      _launcher_reaped=1
+      local _le=0
+      wait "$_LARQL_LAUNCHER_PID" 2>/dev/null || _le=$?
+      if [ "$_le" -ne 0 ]; then
+        echo "coding-agent: larql serve exited prematurely (exit $_le) — see $LARQL_LOG_FILE" >&2
+        return 1
+      fi
+    fi
   done
   echo "coding-agent: timeout waiting for larql serve to start" >&2
   return 1

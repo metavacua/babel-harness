@@ -210,5 +210,38 @@ fi
 rm -f "$calllog" "$pid_file" "$counter_file"
 
 echo ""
+echo "--- 10: startup timeout exits 1 with message when health check never passes ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_CURL_LARQL_EXIT=1 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  LARQL_START_TIMEOUT=1 \
+  bash "$AGENT" "write a hello function" 2>&1)
+rc=$?
+assert_exit "exits 1 on startup timeout" "1" "$rc"
+assert_contains "emits timeout message" "timeout waiting for larql serve to start" "$out"
+rm -f "$calllog"
+
+echo ""
+echo "--- 11: launcher exits prematurely → fast-fail with log-file hint (issue #8) ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_CURL_LARQL_EXIT=1 \
+  MOCK_LARQL_SERVE_EXIT=1 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  LARQL_START_TIMEOUT=5 \
+  bash "$AGENT" "write a hello function" 2>&1)
+rc=$?
+assert_exit "exits 1 on premature launcher exit" "1" "$rc"
+assert_contains "emits premature-exit message with log hint" "exited prematurely" "$out"
+rm -f "$calllog"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

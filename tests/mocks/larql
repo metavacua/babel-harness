@@ -14,6 +14,6 @@ if [ "${1:-}" = "serve" ]; then
     sleep 9999 &
     echo $! > "$MOCK_LARQL_SERVE_PID_FILE"
   fi
-  exit 0  # exits immediately, like real larql does after spawning larql-server
+  exit "${MOCK_LARQL_SERVE_EXIT:-0}"  # default 0 (normal); set to 1 to simulate launch failure
 fi
 exit "${MOCK_LARQL_EXIT:-0}"
