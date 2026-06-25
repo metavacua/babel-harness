@@ -399,19 +399,6 @@ def write_larql_json(edges: list[tuple], out: Path) -> None:
     print(f"[graph] larql.json written to {out} ({len(edges)} edges)", file=sys.stderr)
 
 
-def write_ntriples(edges: list[tuple], out: Path) -> None:
-    """Write N-Triples canonical graph representation."""
-    BASE = "https://github.com/metavacua/babel-harness#"
-    triples = []
-    for frm, rel, to, _conf in edges:
-        s = f"<{BASE}{frm.replace(' ', '_')}>"
-        p = f"<{BASE}{rel}>"
-        o = f"<{BASE}{to.replace(' ', '_')}>"
-        triples.append(f"{s} {p} {o} .")
-    out.write_text('\n'.join(sorted(triples)) + '\n')
-    print(f"[graph] N-Triples written to {out} ({len(triples)} triples)", file=sys.stderr)
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -426,7 +413,6 @@ def main():
     print(f"[graph]   {len(entities)} nodes, {len(edges)} edges", file=sys.stderr)
 
     write_larql_json(edges, out_dir / 'babel-harness.larql.json')
-    write_ntriples(edges, out_dir / 'babel-harness.nt')
 
     # Also write human-readable edge list
     edge_list = out_dir / 'edges.tsv'
@@ -462,7 +448,6 @@ Edges:       {len(edges)}
 
 Output files:
   graphify-out/babel-harness.larql.json  Queryable graph (larql describe --graph)
-  graphify-out/babel-harness.nt          N-Triples graph
   graphify-out/edges.tsv                 Human-readable edge list
   graphify-out/trits.tsv                 Ternary weight matrix
   Vindexfile                             larql build input
