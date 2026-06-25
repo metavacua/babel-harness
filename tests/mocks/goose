@@ -7,5 +7,11 @@ if [ -n "${MOCK_CALL_LOG:-}" ]; then
   echo "goose GOOSE_PROVIDER=${GOOSE_PROVIDER:-} GOOSE_MODEL=${GOOSE_MODEL:-} GOOSE_MODE=${GOOSE_MODE:-} OPENAI_BASE_URL=${OPENAI_BASE_URL:-} args=$*" >> "$MOCK_CALL_LOG"
 fi
 [ -n "${MOCK_GOOSE_SLEEP:-}" ] && sleep "$MOCK_GOOSE_SLEEP"
+if [ "${MOCK_GOOSE_RATE_LIMIT:-0}" = "1" ]; then
+  echo "Ran into this error: Rate limit exceeded: Provider returned error."
+  echo ""
+  echo "Please retry if you think this is a transient or recoverable error."
+  exit 0  # Goose bug: exits 0 even on rate limit
+fi
 echo '{"content":"mock goose response"}'
 exit "${MOCK_GOOSE_EXIT:-0}"

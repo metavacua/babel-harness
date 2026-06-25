@@ -273,5 +273,20 @@ assert_exit "exits 1 on missing --model value" "1" "$rc"
 assert_contains "emits helpful --model value error" "--model requires a value" "$out"
 
 echo ""
+echo "--- 14: goose exits 0 on rate limit → coding-agent exits 1 (issue #7) ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_EXIT=0 \
+  MOCK_GOOSE_RATE_LIMIT=1 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" "write a hello function" 2>&1)
+rc=$?
+assert_exit "exits 1 when goose rate-limits (masked exit 0)" "1" "$rc"
+assert_contains "emits error message hinting at rate limit" "Ran into this error" "$out"
+rm -f "$calllog"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

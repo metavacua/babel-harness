@@ -106,11 +106,31 @@ _start_larql_server() {
   return 1
 }
 
+# Stream command output to terminal while capturing for error pattern detection.
+# Goose bug: exits 0 on rate limit and similar errors — detect from output.
+_run_goose_call() {
+  local _outfile
+  _outfile=$(mktemp)
+  if "$@" | tee "$_outfile"; then
+    local _gc="${PIPESTATUS[0]}"
+    if grep -qFe "Ran into this error:" "$_outfile" 2>/dev/null; then
+      rm -f "$_outfile"
+      return 1  # Goose exits 0 on errors; treat as failure
+    fi
+    rm -f "$_outfile"
+    return "$_gc"
+  else
+    local _gc="${PIPESTATUS[0]}"
+    rm -f "$_outfile"
+    return "$_gc"
+  fi
+}
+
 _run_goose_openrouter() {
   local model="$1" task="$2"
   echo "coding-agent: provider=openrouter model=$model" >&2
   GOOSE_PROVIDER=openrouter GOOSE_MODEL="$model" GOOSE_MODE=auto \
-    "$GOOSE_BIN" run -t "$task"
+    _run_goose_call "$GOOSE_BIN" run -t "$task"
 }
 
 _run_goose_larql() {
@@ -121,8 +141,7 @@ _run_goose_larql() {
     OPENAI_API_KEY=larql \
     GOOSE_MODEL="$vindex" \
     GOOSE_MODE=auto \
-    timeout "$LARQL_INFERENCE_TIMEOUT" \
-    "$GOOSE_BIN" run -t "$task"
+    _run_goose_call timeout "$LARQL_INFERENCE_TIMEOUT" "$GOOSE_BIN" run -t "$task"
 }
 
 # --- Argument parsing ---
