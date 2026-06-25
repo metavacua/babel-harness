@@ -56,8 +56,11 @@ _enroll_larql_in_cgroup() {
   local pid="$1"
   [ "$LARQL_NO_CGROUP" = "1" ] && return 0
   [ -z "$pid" ] && return 0
-  echo "$pid" | sudo tee "${CGROUP_ROOT}/memory/${CGROUP_NAME}/cgroup.procs" > /dev/null 2>&1 || true
-  echo "$pid" | sudo tee "${CGROUP_ROOT}/cpu/${CGROUP_NAME}/cgroup.procs"    > /dev/null 2>&1 || true
+  local cg_mem="${CGROUP_ROOT}/memory/${CGROUP_NAME}"
+  local cg_cpu="${CGROUP_ROOT}/cpu/${CGROUP_NAME}"
+  [ -d "$cg_mem" ] || return 0  # cgroup not set up; skip silently
+  echo "$pid" | sudo tee "${cg_mem}/cgroup.procs" > /dev/null 2>&1 || true
+  echo "$pid" | sudo tee "${cg_cpu}/cgroup.procs" > /dev/null 2>&1 || true
   echo "coding-agent: enrolled larql-server PID $pid in $CGROUP_NAME cgroup" >&2
 }
 
@@ -99,7 +102,7 @@ _start_larql_server() {
       fi
     fi
   done
-  echo "coding-agent: timeout waiting for larql serve to start" >&2
+  echo "coding-agent: timeout waiting for larql serve to start — see $LARQL_LOG_FILE" >&2
   return 1
 }
 
@@ -128,7 +131,12 @@ TASK=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model) MODEL_OVERRIDE="$2"; shift 2 ;;
+    --model)
+      if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
+        echo "coding-agent: --model requires a value (e.g. --model larql/smollm2-360m)" >&2
+        exit 1
+      fi
+      MODEL_OVERRIDE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "coding-agent: unknown option: $1" >&2; usage; exit 1 ;;
     # Accumulate positional args so unquoted "write hello function" works as one task

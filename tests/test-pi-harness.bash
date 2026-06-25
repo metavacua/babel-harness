@@ -22,7 +22,7 @@ setup_cgroup_tmpdir() {
 
 assert_contains() {
   local desc="$1" needle="$2" haystack="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  if echo "$haystack" | grep -qFe "$needle"; then
     echo "  PASS: $desc"; ((PASS++)) || true
   else
     echo "  FAIL: $desc"

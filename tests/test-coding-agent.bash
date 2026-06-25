@@ -12,7 +12,7 @@ export LARQL_PORT="19191"   # high port; nothing runs there
 
 assert_contains() {
   local desc="$1" needle="$2" haystack="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  if echo "$haystack" | grep -qFe "$needle"; then
     echo "  PASS: $desc"; ((PASS++)) || true
   else
     echo "  FAIL: $desc"
@@ -241,6 +241,36 @@ rc=$?
 assert_exit "exits 1 on premature launcher exit" "1" "$rc"
 assert_contains "emits premature-exit message with log hint" "exited prematurely" "$out"
 rm -f "$calllog"
+
+echo ""
+echo "--- 12: cgroup enrollment skipped silently when cgroup path does not exist ---"
+pid_file=$(mktemp)
+counter_file=$(mktemp)
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_LARQL_RUNNING_AFTER=2 \
+  MOCK_LARQL_COUNTER_FILE="$counter_file" \
+  MOCK_CALL_LOG="$calllog" \
+  MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
+  LARQL_SERVER_FINDER="cat $pid_file" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  CGROUP_ROOT="/nonexistent/cgroup" \
+  bash "$AGENT" "write a hello function" 2>&1 || true)
+if echo "$out" | grep -qFe "enrolled"; then
+  assert_fail "no enrolled message when cgroup path does not exist" "output contains 'enrolled' even though cgroup path /nonexistent/cgroup does not exist"
+else
+  assert_pass "no enrolled message when cgroup path does not exist"
+fi
+rm -f "$calllog" "$pid_file" "$counter_file"
+
+echo ""
+echo "--- 13: --model without value exits 1 with helpful message ---"
+out=$(bash "$AGENT" --model 2>&1)
+rc=$?
+assert_exit "exits 1 on missing --model value" "1" "$rc"
+assert_contains "emits helpful --model value error" "--model requires a value" "$out"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
