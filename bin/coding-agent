@@ -113,9 +113,11 @@ _run_goose_call() {
   _outfile=$(mktemp)
   if "$@" | tee "$_outfile"; then
     local _gc="${PIPESTATUS[0]}"
-    if grep -qFe "Ran into this error:" "$_outfile" 2>/dev/null; then
+    # Goose bug: exits 0 on rate-limit/API errors. Both lines always appear together.
+    if grep -qFe "Ran into this error:" "$_outfile" 2>/dev/null && \
+       grep -qFe "Please retry if you think" "$_outfile" 2>/dev/null; then
       rm -f "$_outfile"
-      return 1  # Goose exits 0 on errors; treat as failure
+      return 1
     fi
     rm -f "$_outfile"
     return "$_gc"
