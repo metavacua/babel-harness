@@ -318,5 +318,13 @@ assert_exit "exits 1 on --model larql/ empty vindex" "1" "$rc"
 assert_contains "emits helpful empty-vindex error" "model name" "$out"
 
 echo ""
+echo "--- 18: --help exits 0 and prints usage ---"
+out=$(bash "$AGENT" --help 2>&1)
+rc=$?
+assert_exit "exits 0 on --help" "0" "$rc"
+assert_contains "prints usage header" "Usage:" "$out"
+assert_contains "mentions --model option" "--model" "$out"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
