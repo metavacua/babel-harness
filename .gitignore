@@ -1,0 +1,7 @@
+# Built vindex artifacts (large binary files, regenerate with: larql build)
+build/
+*.vindex
+
+# Temporary files
+*.tmp
+*.log
