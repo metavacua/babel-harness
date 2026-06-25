@@ -34,6 +34,18 @@ assert_fail() {
   ((FAIL++)) || true
 }
 
+assert_not_contains() {
+  local desc="$1" needle="$2" haystack="$3"
+  if echo "$haystack" | grep -qFe "$needle"; then
+    echo "  FAIL: $desc"
+    echo "    expected to not contain: $needle"
+    echo "    actual:   $haystack"
+    ((FAIL++)) || true
+  else
+    echo "  PASS: $desc"; ((PASS++)) || true
+  fi
+}
+
 assert_exit() {
   local desc="$1" expected="$2" actual="$3"
   if [ "$expected" = "$actual" ]; then
@@ -188,16 +200,15 @@ pid_file=$(mktemp)
 counter_file=$(mktemp)
 calllog=$(mktemp)
 # Mock larql: forks sleep 9999 (writes PID), then exits immediately — same as real larql.
-# LARQL_SERVER_FINDER tells coding-agent how to find the subprocess PID (in production:
-# ss -tlpn; in tests: read from the file the mock wrote).
+# LARQL_SERVER_PID_FILE tells coding-agent where the mock wrote the child PID (in production:
+# _larql_find_server_pid uses ss -tlpn instead).
 out=$(PATH="$MOCKS:$PATH" \
   MOCK_CURL_OPENROUTER_EXIT=1 \
   MOCK_LARQL_RUNNING_AFTER=2 \
   MOCK_LARQL_COUNTER_FILE="$counter_file" \
   MOCK_CALL_LOG="$calllog" \
   MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
-  LARQL_SERVER_FINDER="cat $pid_file" \
-  LARQL_TEST_MODE=1 \
+  LARQL_SERVER_PID_FILE="$pid_file" \
   GOOSE_BIN="$MOCKS/goose" \
   LARQL_BIN="$MOCKS/larql" \
   bash "$AGENT" "write a hello function" 2>&1 || true)
@@ -254,17 +265,12 @@ out=$(PATH="$MOCKS:$PATH" \
   MOCK_LARQL_COUNTER_FILE="$counter_file" \
   MOCK_CALL_LOG="$calllog" \
   MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
-  LARQL_SERVER_FINDER="cat $pid_file" \
-  LARQL_TEST_MODE=1 \
+  LARQL_SERVER_PID_FILE="$pid_file" \
   GOOSE_BIN="$MOCKS/goose" \
   LARQL_BIN="$MOCKS/larql" \
   CGROUP_ROOT="/nonexistent/cgroup" \
   bash "$AGENT" "write a hello function" 2>&1 || true)
-if echo "$out" | grep -qFe "enrolled"; then
-  assert_fail "no enrolled message when cgroup path does not exist" "output contains 'enrolled' even though cgroup path /nonexistent/cgroup does not exist"
-else
-  assert_pass "no enrolled message when cgroup path does not exist"
-fi
+assert_not_contains "no enrolled message when cgroup path does not exist" "enrolled" "$out"
 rm -f "$calllog" "$pid_file" "$counter_file"
 
 echo ""
@@ -298,11 +304,7 @@ out=$(PATH="$MOCKS:$PATH" \
   GOOSE_BIN="$MOCKS/goose" \
   LARQL_BIN="$MOCKS/larql" \
   bash "$AGENT" -- --this-looks-like-an-option 2>&1 || true)
-if echo "$out" | grep -qFe "unknown option"; then
-  assert_fail "-- is not treated as an unknown option" "output contains 'unknown option' instead of passing -- as end-of-options"
-else
-  assert_pass "-- ends option parsing (no unknown-option error)"
-fi
+assert_not_contains "-- ends option parsing (no unknown-option error)" "unknown option" "$out"
 rm -f "$calllog"
 
 echo ""
@@ -326,31 +328,6 @@ rc=$?
 assert_exit "exits 0 on --help" "0" "$rc"
 assert_contains "prints usage header" "Usage:" "$out"
 assert_contains "mentions --model option" "--model" "$out"
-
-echo ""
-echo "--- 19: LARQL_SERVER_FINDER is ignored when LARQL_TEST_MODE is unset ---"
-pid_file=$(mktemp)
-counter_file=$(mktemp)
-calllog=$(mktemp)
-injected_flag=$(mktemp)
-rm -f "$injected_flag"  # remove so we can detect if eval'd touch re-creates it
-# LARQL_SERVER_FINDER set but LARQL_TEST_MODE not set → should not eval
-out=$(PATH="$MOCKS:$PATH" \
-  MOCK_CURL_OPENROUTER_EXIT=1 \
-  MOCK_LARQL_RUNNING_AFTER=1 \
-  MOCK_LARQL_COUNTER_FILE="$counter_file" \
-  MOCK_CALL_LOG="$calllog" \
-  MOCK_LARQL_SERVE_PID_FILE="$pid_file" \
-  LARQL_SERVER_FINDER="touch $injected_flag && cat $pid_file" \
-  GOOSE_BIN="$MOCKS/goose" \
-  LARQL_BIN="$MOCKS/larql" \
-  bash "$AGENT" "write a hello function" 2>&1 || true)
-if [ -f "$injected_flag" ]; then
-  assert_fail "LARQL_SERVER_FINDER not eval'd without LARQL_TEST_MODE" "eval ran despite LARQL_TEST_MODE not being set"
-else
-  assert_pass "LARQL_SERVER_FINDER ignored when LARQL_TEST_MODE unset"
-fi
-rm -f "$calllog" "$pid_file" "$counter_file" "$injected_flag"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
