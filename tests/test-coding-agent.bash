@@ -288,5 +288,35 @@ assert_contains "emits error message hinting at rate limit" "Ran into this error
 rm -f "$calllog"
 
 echo ""
+echo "--- 15: -- sentinel ends option parsing; remaining args become TASK ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_EXIT=0 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" -- --this-looks-like-an-option 2>&1 || true)
+if echo "$out" | grep -qFe "unknown option"; then
+  assert_fail "-- is not treated as an unknown option" "output contains 'unknown option' instead of passing -- as end-of-options"
+else
+  assert_pass "-- ends option parsing (no unknown-option error)"
+fi
+rm -f "$calllog"
+
+echo ""
+echo "--- 16: --model openrouter/ with empty model name exits 1 with helpful message ---"
+out=$(bash "$AGENT" --model "openrouter/" "write a function" 2>&1)
+rc=$?
+assert_exit "exits 1 on --model openrouter/ empty model" "1" "$rc"
+assert_contains "emits helpful empty-model error" "model name" "$out"
+
+echo ""
+echo "--- 17: --model larql/ with empty vindex name exits 1 with helpful message ---"
+out=$(bash "$AGENT" --model "larql/" "write a function" 2>&1)
+rc=$?
+assert_exit "exits 1 on --model larql/ empty vindex" "1" "$rc"
+assert_contains "emits helpful empty-vindex error" "model name" "$out"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

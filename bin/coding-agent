@@ -159,10 +159,15 @@ while [[ $# -gt 0 ]]; do
       fi
       MODEL_OVERRIDE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
+    --) shift; break ;;  # end of options; remaining args are positional
     -*) echo "coding-agent: unknown option: $1" >&2; usage; exit 1 ;;
     # Accumulate positional args so unquoted "write hello function" works as one task
     *) TASK="${TASK:+$TASK }$1"; shift ;;
   esac
+done
+# Collect any remaining positional args after --
+while [[ $# -gt 0 ]]; do
+  TASK="${TASK:+$TASK }$1"; shift
 done
 
 if [ -z "$TASK" ]; then
@@ -175,6 +180,11 @@ fi
 if [ -n "$MODEL_OVERRIDE" ]; then
   local_provider="${MODEL_OVERRIDE%%/*}"
   local_model="${MODEL_OVERRIDE#*/}"
+  if [ -z "$local_model" ] || [ "$local_model" = "$local_provider" ]; then
+    echo "coding-agent: --model requires a non-empty model name after the provider prefix" >&2
+    echo "  e.g. --model larql/smollm2-360m  or  --model openrouter/qwen/qwen3-coder:free" >&2
+    exit 1
+  fi
   if [ "$local_provider" = "larql" ]; then
     if ! _check_larql; then
       _start_larql_server "$local_model" || exit 1
