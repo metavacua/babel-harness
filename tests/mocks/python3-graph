@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Mock python3 stub for github_graph.py tests.
+# Called as: python3 <script> --repo ... --query ... --output json
+# MOCK_GRAPH_EXIT   — exit code (default 0)
+# MOCK_GRAPH_OUTPUT — stdout (default: valid JSON with seeds and expanded)
+# MOCK_CALL_LOG     — if set, appends invocation record
+set -uo pipefail
+if [ -n "${MOCK_CALL_LOG:-}" ]; then
+  echo "python3-graph args=$*" >> "$MOCK_CALL_LOG"
+fi
+if [ "${MOCK_GRAPH_EXIT:-0}" != "0" ]; then
+  echo '{"ok":false,"error":"MockError","cause":"injected failure"}' >&2
+  exit "${MOCK_GRAPH_EXIT}"
+fi
+cat <<'EOF'
+{
+  "ok": true,
+  "repo": "mock-owner/mock-repo",
+  "ref": "main",
+  "query": "mock query",
+  "seeds": [
+    {"entity": "crates/larql-vindex/src/index/compute/gate_knn/mod.rs", "score": 0.9},
+    {"entity": "crates/larql-server/src/main.rs", "score": 0.7}
+  ],
+  "expanded": [
+    "crates/larql-vindex/src/index/compute/gate_knn/mod.rs",
+    "crates/larql-server/src/main.rs",
+    "crates/larql-vindex/src/lib.rs"
+  ],
+  "context_hint": "Top-2 entities + 2-hop BFS."
+}
+EOF
+exit 0

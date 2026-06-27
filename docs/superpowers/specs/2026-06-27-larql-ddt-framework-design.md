@@ -14,7 +14,7 @@ This spec formalizes four interacting sub-systems:
 1. **DDT Framework** — a type system and composition model for skills/tools that guarantees determinism, decidability, and tractability by construction; no unhandled errors for arbitrary input.
 2. **chrishayuk/larql Comprehension** — a formal model of LARQL as a typed graph-database inference engine, derived from reading the main branch.
 3. **GitHub as Remote Vindex** — a formal mapping from any GitHub repository to a LARQL-queryable triple-store; treats the code graph as a "hosted remote" vindex for LQL queries.
-4. **FFN KNN Attention** — an attention mechanism in babel-harness that uses GitHub code graphs as FFN KNN retrieval databases, enabling GitHub repos to act as local language model context sources.
+4. **Graph Retrieval Context** — a lexical retrieval mechanism (TF-IDF v1; upgrade path to neural gate-KNN via larql `/v1/embeddings`) that walks GitHub code graphs to produce ranked file/entity context injected into the Goose task prompt. This approximates the graph-walk structure of LARQL's gate-KNN but uses lexical scoring, not learned FFN gate vectors. GitHub repos act as retrieval context sources for the LLM, not as language models themselves.
 
 These four sub-systems compose recursively: the DDT framework is applied to itself (the spec you are reading is DDT-compliant) and to each other sub-system.
 
@@ -70,7 +70,7 @@ ToolError ::=
 Tool ::= ToolCall → Result<ToolOutput, ToolError>
 ```
 
-**Determinism proof**: `Tool` is a function (not a relation). Same `ToolCall` in the same `Environment` → same `Result`. Non-deterministic tools (network, randomness) are marked with `Nondeterministic<T>` wrapper and must be seeded or bounded externally.
+**Determinism (qualified)**: Pure-computation tools (`Read`, `Edit`, `Write`, `Bash` with stable environment) are deterministic: same input → same output. Network tools (`WebFetch`, `GitHubAPI`) are *quasi-deterministic*: same input to the same server state produces the same response, but network failure, rate limits, and API changes are external nondeterminism. These are represented as `Result<T, ToolError>` — the nondeterminism is observable in the error variant, not hidden. The program is deterministic *given the environment*; full end-to-end determinism requires a stable network and API, which is a deployment-time not a type-level property.
 
 **Decidability proof**: `ToolError` is a finite ADT. Every error case is enumerated. Pattern matching on `ToolError` is exhaustive by construction; the type checker rejects non-exhaustive match. Adding a new error requires updating the ADT and all match sites.
 
@@ -340,44 +340,43 @@ Enforcement: any `GitHubAPI` call with method `POST/PATCH/DELETE` to a non-metav
 
 ---
 
-## 4. FFN KNN Attention via GitHub Graphs
+## 4. Graph Retrieval Context via GitHub Graphs
 
 ### 4.1 Architecture
 
-The FFN KNN attention mechanism replaces dense context lookup with sparse graph retrieval:
+Sparse graph retrieval over a GitHub repo's entity graph, injected as context into the Goose task prompt. This approximates the graph-walk structure of LARQL's gate-KNN mechanism (WalkFfn: token → gate_vector → top-K neurons → walk), but uses TF-IDF lexical scoring as a v1 stand-in for learned gate vectors. GitHub repos act as retrieval context sources; the LLM inference path (OpenRouter or larql) remains unchanged.
 
 ```
-# Standard LLM context: concatenate all relevant files → prompt
-# Problem: O(n_files × file_size) tokens — quickly exceeds context window
+# Replaces: concatenate all relevant files (O(n_files × file_size) tokens)
+# With:     sparse graph retrieval (O(K × avg_node_content) tokens)
 
-# FFN KNN attention: sparse retrieval over the code graph
-# Solution: gate vector selects top-K nodes → only those nodes fetched
+# Pipeline (v1 — TF-IDF):
+1. Score nodes: tfidf_cosine(task_description, node.name) → top_K seeds
+2. Graph walk:  BFS from top_K seeds along import/call/depends_on edges → expanded set
+3. Inject:      prepend entity list to Goose task prompt
 
-# Pipeline:
-1. Query embedding: embed(task_description) → q ∈ R^d
-2. Gate KNN: knn(q, {embed(node.name) for node in github_graph}, K) → top_K nodes
-3. Graph walk: follow edges from top_K nodes (imports, calls) → expanded set
-4. Context construction: fetch content of expanded set → prompt context
-5. LLM call: coding-agent with context → response
+# Upgrade path (v2 — neural):
+1. Score nodes: larql /v1/embeddings → embed(task_description) cosine embed(node.name)
+2. Graph walk:  same BFS
+3. Inject:      same
 ```
 
-### 4.2 Gate Vector for Code Nodes
-
-For a code node (file or function), the gate vector is computed as:
+### 4.2 Gate Vector (v1: TF-IDF, v2: larql embeddings)
 
 ```python
-def gate_vector(node: GitHubNode) -> np.ndarray:
-    # Option A: TF-IDF over node name + path tokens (no external deps)
+def gate_vector_v1(node: GitHubNode) -> dict:
+    # TF-IDF over tokenized identifier (camelCase + snake_case split)
     tokens = tokenize_identifier(node.name) + path_tokens(node.path)
-    return tfidf(tokens, corpus=all_node_names)
+    return tfidf(tokens, corpus=all_node_names)  # sparse dict, no external deps
 
-    # Option B: use larql /v1/embeddings endpoint (requires larql-server running)
+def gate_vector_v2(node: GitHubNode) -> list:
+    # Neural: larql /v1/embeddings (requires larql-server; uses smollm2-360m)
     response = requests.post("http://localhost:8080/v1/embeddings",
                              json={"input": node.name, "model": "smollm2-360m"})
     return response.json()["data"][0]["embedding"]
 ```
 
-Option A (TF-IDF) is tractable without any running service. Option B uses smollm2-360m embeddings for higher quality — same model already used in coding-agent local path.
+v1 (TF-IDF) is implemented in `scripts/github_graph.py` and wired into `bin/coding-agent`. v2 is the upgrade path when larql-server is running.
 
 ### 4.3 Graph Walk (Sparse Attention)
 

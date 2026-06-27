@@ -7,9 +7,10 @@ Formally: a GitHub repo G = (V, E) is isomorphic to a LARQL vindex entity graph.
 This script extracts (V, E) via the GitHub API and outputs LQL INSERT triples.
 
 DDT properties:
-  Deterministic: same repo@ref → same triples (given stable GitHub API responses)
-  Decidable:     all loops bounded by finite file tree size
-  Tractable:     O(|V| + |E|) graph extraction; O(K log |V|) gate-KNN
+  Quasi-deterministic: same repo@ref → same triples given stable GitHub API; network I/O
+                       is nondeterministic by nature (rate limits, flaky DNS, API changes)
+  Decidable:           all loops bounded by finite file tree size
+  Tractable:           O(|V| + |E|) graph extraction; O(|V| × avg_tokens) TF-IDF scoring
   No unhandled errors: all failure paths return typed JSON error body
 
 Usage:
@@ -133,6 +134,12 @@ def _fetch_tree(owner: str, repo: str, ref: str) -> list[dict]:
         raise
     if not isinstance(data, dict) or "tree" not in data:
         raise _err("ParseError", endpoint=endpoint, msg="missing 'tree' key")
+    if data.get("truncated", False):
+        print(json.dumps({"ok": False, "warning": "TreeTruncated",
+                          "msg": "GitHub truncated the recursive tree (repo too large); "
+                                 "graph is partial — increase depth or use sparse checkout",
+                          "repo": f"{owner}/{repo}", "ref": ref}),
+              file=sys.stderr)
     return data["tree"]
 
 
@@ -249,9 +256,13 @@ def build_graph(owner: str, repo: str, ref: str,
     dirs: list[str] = []
     blobs: list[dict] = []
     for item in tree:
-        if item["type"] == "tree":
-            dirs.append(item["path"])
-        elif item["type"] == "blob":
+        item_type = item.get("type", "")
+        item_path = item.get("path", "")
+        if not item_path:
+            continue  # malformed tree entry; skip
+        if item_type == "tree":
+            dirs.append(item_path)
+        elif item_type == "blob":
             blobs.append(item)
 
     # Add top-level directory nodes and contains edges from repo root
@@ -261,7 +272,7 @@ def build_graph(owner: str, repo: str, ref: str,
         add_edge(repo_id, "contains", d)
 
     # Add file nodes and directory → file containment edges
-    for blob in sorted(blobs, key=lambda b: b["path"]):
+    for blob in sorted(blobs, key=lambda b: b.get("path", "")):
         path = blob["path"]
         lang = _detect_language(path)
         # Use the stem or basename as entity ID to keep IDs short
@@ -388,7 +399,12 @@ def build_graph(owner: str, repo: str, ref: str,
 
 
 # ---------------------------------------------------------------------------
-# Gate-KNN retrieval (FFN KNN attention mechanism)
+# TF-IDF lexical retrieval (v1 approximation of gate-KNN attention)
+#
+# LARQL's gate-KNN uses learned gate vectors from transformer FFN weights.
+# This implementation substitutes TF-IDF cosine similarity over tokenized
+# entity names — same graph walk structure, lexical rather than neural scoring.
+# Upgrade path: replace _tfidf_vector + _cosine with larql /v1/embeddings calls.
 # ---------------------------------------------------------------------------
 
 def _tokenize(text: str) -> list[str]:
@@ -429,12 +445,12 @@ def _cosine(a: dict[int, float], b: dict[int, float]) -> float:
 def gate_knn(query: str, entities: list[str], edges: list[tuple],
              k: int = 5) -> list[tuple[str, float]]:
     """
-    FFN KNN attention: given a query, find top-K entities by TF-IDF cosine similarity.
+    TF-IDF lexical retrieval: given a query, find top-K entities by TF-IDF cosine similarity.
 
-    Returns list of (entity, score) sorted by descending score.
-
-    DDT: deterministic (TF-IDF is deterministic), decidable (finite vocab),
-    tractable (O(|entities| × avg_tokens)).
+    Named gate_knn because it approximates the graph-walk structure of LARQL's gate-KNN
+    (token → gate_vector → top-K neurons → walk), but uses TF-IDF instead of learned
+    gate vectors. Pure-function: deterministic, decidable (finite vocab), tractable
+    O(|entities| × avg_tokens).
     """
     if not entities:
         return []
@@ -623,38 +639,48 @@ def main() -> int:
     except GraphError as e:
         print(e.to_json(), file=sys.stderr)
         return 1
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": "InternalError",
+                          "cause": str(e), "type": type(e).__name__}),
+              file=sys.stderr)
+        return 1
 
     # Query mode: gate-KNN + BFS walk
-    if args.query:
-        seeds_scored = gate_knn(args.query, entities, edges, k=args.knn)
-        seeds = [e for e, _ in seeds_scored]
-        expanded = bfs_walk(seeds, edges, hops=args.hops, max_nodes=args.max_nodes)
+    try:
+        if args.query:
+            seeds_scored = gate_knn(args.query, entities, edges, k=args.knn)
+            seeds = [e for e, _ in seeds_scored]
+            expanded = bfs_walk(seeds, edges, hops=args.hops, max_nodes=args.max_nodes)
 
-        # In query mode: output a JSON summary regardless of --output format
-        result = {
-            "ok": True,
-            "repo": f"{owner}/{repo}",
-            "ref": args.ref,
-            "query": args.query,
-            "seeds": [{"entity": e, "score": round(s, 4)} for e, s in seeds_scored],
-            "expanded": expanded,
-            "context_hint": (
-                f"Top-{args.knn} entities matching '{args.query}' "
-                f"+ {args.hops}-hop BFS walk. Use as retrieval context for LLM."
-            ),
-        }
-        print(json.dumps(result, indent=2))
+            result = {
+                "ok": True,
+                "repo": f"{owner}/{repo}",
+                "ref": args.ref,
+                "query": args.query,
+                "seeds": [{"entity": e, "score": round(s, 4)} for e, s in seeds_scored],
+                "expanded": expanded,
+                "context_hint": (
+                    f"Top-{args.knn} entities matching '{args.query}' "
+                    f"+ {args.hops}-hop BFS walk. Use as retrieval context for LLM."
+                ),
+            }
+            print(json.dumps(result, indent=2))
+            return 0
+
+        # Graph dump mode
+        if args.output == "lql":
+            print(_to_lql(owner, repo, args.ref, entities, edges))
+        elif args.output == "tsv":
+            print(_to_tsv(edges))
+        else:
+            print(_to_json_output(owner, repo, args.ref, entities, edges))
+
         return 0
-
-    # Graph dump mode
-    if args.output == "lql":
-        print(_to_lql(owner, repo, args.ref, entities, edges))
-    elif args.output == "tsv":
-        print(_to_tsv(edges))
-    else:
-        print(_to_json_output(owner, repo, args.ref, entities, edges))
-
-    return 0
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": "InternalError",
+                          "cause": str(e), "type": type(e).__name__}),
+              file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

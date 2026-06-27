@@ -330,5 +330,59 @@ assert_contains "prints usage header" "Usage:" "$out"
 assert_contains "mentions --model option" "--model" "$out"
 
 echo ""
+echo "--- 19: GITHUB_GRAPH_REPO set → graph context prepended to task ---"
+calllog=$(mktemp)
+# Use a temp file as the "script" (must exist for the file check); real execution goes to python3-graph mock
+stub_script=$(mktemp --suffix=.py)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_EXIT=0 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  GITHUB_GRAPH_REPO="mock-owner/mock-repo" \
+  GITHUB_GRAPH_SCRIPT="$stub_script" \
+  PYTHON3_BIN="$MOCKS/python3-graph" \
+  bash "$AGENT" "gate knn walk" 2>&1)
+rc=$?
+assert_exit "exits 0 with graph context" "0" "$rc"
+assert_contains "graph context injected: repo queried" "querying graph context from mock-owner/mock-repo" "$out"
+assert_contains "graph context injected: seed entity in goose -t arg" "gate_knn" "$(cat "$calllog")"
+rm -f "$calllog" "$stub_script"
+
+echo ""
+echo "--- 20: GITHUB_GRAPH_REPO set, graph script fails → still runs Goose (non-blocking) ---"
+calllog=$(mktemp)
+stub_script=$(mktemp --suffix=.py)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_EXIT=0 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  GITHUB_GRAPH_REPO="mock-owner/mock-repo" \
+  GITHUB_GRAPH_SCRIPT="$stub_script" \
+  PYTHON3_BIN="$MOCKS/python3-graph" \
+  MOCK_GRAPH_EXIT=1 \
+  bash "$AGENT" "gate knn walk" 2>&1)
+rc=$?
+assert_exit "exits 0 even when graph script fails" "0" "$rc"
+assert_contains "goose still called despite graph failure" "GOOSE_PROVIDER=openrouter" "$(cat "$calllog")"
+rm -f "$calllog" "$stub_script"
+
+echo ""
+echo "--- 21: GITHUB_GRAPH_REPO unset → no graph query, normal Goose call ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_EXIT=0 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" "write a hello function" 2>&1)
+rc=$?
+assert_exit "exits 0 without graph context" "0" "$rc"
+assert_not_contains "no graph query mention in output" "querying graph context" "$out"
+assert_contains "goose still called normally" "GOOSE_PROVIDER=openrouter" "$(cat "$calllog")"
+rm -f "$calllog"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

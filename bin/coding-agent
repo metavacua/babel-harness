@@ -22,6 +22,15 @@ CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 CGROUP_NAME="${CGROUP_NAME:-babel-harness}"
 # set LARQL_NO_CGROUP=1 to skip cgroup enrollment (tests, CI, non-Linux)
 LARQL_NO_CGROUP="${LARQL_NO_CGROUP:-0}"
+# GitHub remote vindex: set to "owner/repo" to inject graph retrieval context into the task.
+# TF-IDF lexical retrieval over the repo entity graph; result prepended to Goose task prompt.
+GITHUB_GRAPH_REPO="${GITHUB_GRAPH_REPO:-}"
+GITHUB_GRAPH_REF="${GITHUB_GRAPH_REF:-main}"
+GITHUB_GRAPH_KNN="${GITHUB_GRAPH_KNN:-8}"
+GITHUB_GRAPH_HOPS="${GITHUB_GRAPH_HOPS:-2}"
+GITHUB_GRAPH_MAX_CONTEXT="${GITHUB_GRAPH_MAX_CONTEXT:-2000}"
+GITHUB_GRAPH_SCRIPT="${GITHUB_GRAPH_SCRIPT:-$(dirname "$0")/../scripts/github_graph.py}"
+PYTHON3_BIN="${PYTHON3_BIN:-python3}"
 
 usage() {
   cat <<'EOF'
@@ -110,6 +119,48 @@ _start_larql_server() {
   return 1
 }
 
+# Run TF-IDF lexical retrieval over a GitHub repo and return a context string.
+# Returns empty string on any failure (non-blocking — graph context is best-effort).
+_github_graph_context() {
+  local repo="$1" task="$2"
+  [ -z "$repo" ] && return 0
+  if ! command -v "$PYTHON3_BIN" >/dev/null 2>&1; then
+    echo "coding-agent: python3 not found — skipping GITHUB_GRAPH_REPO context" >&2
+    return 0
+  fi
+  if [ ! -f "$GITHUB_GRAPH_SCRIPT" ]; then
+    echo "coding-agent: GITHUB_GRAPH_SCRIPT not found: $GITHUB_GRAPH_SCRIPT — skipping" >&2
+    return 0
+  fi
+  echo "coding-agent: querying graph context from $repo (ref=$GITHUB_GRAPH_REF knn=$GITHUB_GRAPH_KNN)" >&2
+  local raw
+  raw=$("$PYTHON3_BIN" "$GITHUB_GRAPH_SCRIPT" \
+    --repo "$repo" \
+    --ref "$GITHUB_GRAPH_REF" \
+    --query "$task" \
+    --knn "$GITHUB_GRAPH_KNN" \
+    --hops "$GITHUB_GRAPH_HOPS" \
+    --max-nodes "$GITHUB_GRAPH_MAX_CONTEXT" \
+    --output json 2>/dev/null) || true
+  [ -z "$raw" ] && return 0
+  # Extract seeds and expanded node list for context injection
+  local seeds
+  seeds=$(printf '%s' "$raw" | "$PYTHON3_BIN" -c "
+import sys, json
+d = json.load(sys.stdin)
+if d.get('ok') and 'seeds' in d:
+    print('Relevant entities (TF-IDF lexical match):')
+    for s in d['seeds']:
+        print(f\"  {s['entity']} (score={s['score']})\")
+    exp = d.get('expanded', [])
+    if exp:
+        print(f'Expanded context ({len(exp)} nodes via BFS):')
+        for e in exp[:20]:
+            print(f'  {e}')
+" 2>/dev/null) || true
+  printf '%s' "$seeds"
+}
+
 # Stream command output to terminal while capturing for error pattern detection.
 # Goose bug: exits 0 on rate limit and similar errors — detect from output.
 _run_goose_call() {
@@ -177,6 +228,15 @@ if [ -z "$TASK" ]; then
   echo "coding-agent: TASK argument required" >&2
   usage
   exit 1
+fi
+
+# --- GitHub graph context injection (best-effort, non-blocking) ---
+if [ -n "$GITHUB_GRAPH_REPO" ]; then
+  _graph_ctx=$(_github_graph_context "$GITHUB_GRAPH_REPO" "$TASK")
+  if [ -n "$_graph_ctx" ]; then
+    TASK="$(printf 'Code graph context from %s:\n%s\n\nTask: %s' \
+      "$GITHUB_GRAPH_REPO" "$_graph_ctx" "$TASK")"
+  fi
 fi
 
 # --- Model override: larql/VINDEX forces local path regardless of OpenRouter ---
