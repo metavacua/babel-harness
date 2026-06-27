@@ -43,6 +43,7 @@ curl	mocks	curl	1
 demo-coding-agent	invokes	larql	1
 goose	is_a	external_binary	1
 goose	mocks	goose	1
+harness-common	defines	_check_http	1
 harness-common	defines	_check_openrouter	1
 harness-common	implements	openrouter-health-check	1
 harness-common	invokes	curl	1
@@ -68,7 +69,6 @@ pi-harness	implements	openrouter-provider	1
 pi-harness	invokes	pgrep	1
 pi-harness	invokes	sudo	1
 pi-harness	is_a	script	1
-pi-harness	reads_env	CGROUP_NAME	1
 pi-harness	sets_env	CGROUP_CPU_RESERVE_CORES	1
 pi-harness	sets_env	CGROUP_ROOT	1
 pi-harness	sets_env	OLLAMA_MODEL	1
@@ -81,6 +81,7 @@ pi-harness	sets_env	PI_BIN	1
 test-coding-agent	defines	assert_contains	1
 test-coding-agent	defines	assert_exit	1
 test-coding-agent	defines	assert_fail	1
+test-coding-agent	defines	assert_not_contains	1
 test-coding-agent	defines	assert_pass	1
 test-coding-agent	invokes	ss	1
 test-coding-agent	invokes	timeout	1

@@ -1,105 +1,426 @@
 {
   "larql_version": "1.0",
-  "metadata": {
-    "source": "babel-harness",
-    "generator": "extract-graph.py"
-  },
+  "metadata": {},
   "schema": {},
   "edges": [
     {
-      "s": "_enroll_larql_in_cgroup",
-      "r": "implements",
-      "o": "cgroup-enrollment",
+      "s": "coding-agent",
+      "r": "is_a",
+      "o": "script",
       "c": 1.0
     },
     {
-      "s": "_larql_cleanup",
-      "r": "calls",
-      "o": "_LARQL_SERVER_PID",
+      "s": "pi-harness",
+      "r": "is_a",
+      "o": "script",
       "c": 1.0
     },
     {
-      "s": "_run_goose_call",
-      "r": "implements",
-      "o": "rate-limit-detection",
+      "s": "harness-common",
+      "r": "is_a",
+      "o": "library",
       "c": 1.0
     },
     {
-      "s": "_run_goose_larql",
-      "r": "calls",
-      "o": "_run_goose_call",
+      "s": "test-coding-agent",
+      "r": "is_a",
+      "o": "test_suite",
       "c": 1.0
     },
     {
-      "s": "_run_goose_openrouter",
-      "r": "calls",
-      "o": "_run_goose_call",
+      "s": "test-pi-harness",
+      "r": "is_a",
+      "o": "test_suite",
       "c": 1.0
     },
     {
-      "s": "_start_larql_server",
-      "r": "calls",
-      "o": "_check_larql",
+      "s": "goose",
+      "r": "is_a",
+      "o": "external_binary",
       "c": 1.0
     },
     {
-      "s": "_start_larql_server",
-      "r": "calls",
-      "o": "_enroll_larql_in_cgroup",
+      "s": "larql",
+      "r": "is_a",
+      "o": "external_binary",
       "c": 1.0
     },
     {
-      "s": "_start_larql_server",
-      "r": "calls",
-      "o": "_larql_find_server_pid",
+      "s": "curl",
+      "r": "is_a",
+      "o": "external_binary",
       "c": 1.0
     },
     {
-      "s": "_start_larql_server",
-      "r": "implements",
-      "o": "fast-fail-on-launcher-error",
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "PI_BIN",
       "c": 1.0
     },
     {
-      "s": "_start_larql_server",
-      "r": "implements",
-      "o": "server-startup-poll",
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "OPENROUTER_CHECK_URL",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "OLLAMA_URL",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "CGROUP_ROOT",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "OPENROUTER_MODEL",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "OLLAMA_MODEL",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "CGROUP_CPU_RESERVE_CORES",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "OLLAMA_WARMUP_POLL_INTERVAL",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "sets_env",
+      "o": "OLLAMA_WARMUP_TIMEOUT",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "reads_env",
+      "o": "CGROUP_NAME",
+      "c": 0.7
+    },
+    {
+      "s": "pi-harness",
+      "r": "invokes",
+      "o": "timeout",
+      "c": 0.8
+    },
+    {
+      "s": "pi-harness",
+      "r": "invokes",
+      "o": "pgrep",
+      "c": 0.8
+    },
+    {
+      "s": "pi-harness",
+      "r": "invokes",
+      "o": "curl",
+      "c": 0.8
+    },
+    {
+      "s": "pi-harness",
+      "r": "invokes",
+      "o": "sudo",
+      "c": 0.8
+    },
+    {
+      "s": "demo-coding-agent",
+      "r": "invokes",
+      "o": "larql",
+      "c": 0.8
+    },
+    {
+      "s": "coding-agent",
+      "r": "sets_env",
+      "o": "OPENROUTER_CHECK_URL",
       "c": 1.0
     },
     {
       "s": "coding-agent",
-      "r": "calls",
-      "o": "_check_larql",
+      "r": "sets_env",
+      "o": "LARQL_BIN",
       "c": 1.0
     },
     {
       "s": "coding-agent",
-      "r": "calls",
-      "o": "_check_openrouter",
+      "r": "sets_env",
+      "o": "LARQL_PORT",
       "c": 1.0
     },
     {
       "s": "coding-agent",
-      "r": "calls",
-      "o": "_run_goose_larql",
+      "r": "sets_env",
+      "o": "LARQL_VINDEX",
       "c": 1.0
     },
     {
       "s": "coding-agent",
-      "r": "calls",
-      "o": "_run_goose_openrouter",
+      "r": "sets_env",
+      "o": "OPENROUTER_MODEL",
       "c": 1.0
     },
     {
       "s": "coding-agent",
-      "r": "calls",
-      "o": "_start_larql_server",
+      "r": "sets_env",
+      "o": "GOOSE_BIN",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "sets_env",
+      "o": "LARQL_START_TIMEOUT",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "sets_env",
+      "o": "LARQL_LOG_FILE",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "sets_env",
+      "o": "LARQL_INFERENCE_TIMEOUT",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "sets_env",
+      "o": "CGROUP_ROOT",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "sets_env",
+      "o": "CGROUP_NAME",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "sets_env",
+      "o": "LARQL_NO_CGROUP",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "invokes",
+      "o": "timeout",
+      "c": 0.8
+    },
+    {
+      "s": "coding-agent",
+      "r": "invokes",
+      "o": "ss",
+      "c": 0.8
+    },
+    {
+      "s": "coding-agent",
+      "r": "invokes",
+      "o": "larql",
+      "c": 0.8
+    },
+    {
+      "s": "coding-agent",
+      "r": "invokes",
+      "o": "awk",
+      "c": 0.8
+    },
+    {
+      "s": "coding-agent",
+      "r": "invokes",
+      "o": "goose",
+      "c": 0.8
+    },
+    {
+      "s": "coding-agent",
+      "r": "invokes",
+      "o": "sudo",
+      "c": 0.8
+    },
+    {
+      "s": "harness-common",
+      "r": "reads_env",
+      "o": "OPENROUTER_CHECK_URL",
+      "c": 0.7
+    },
+    {
+      "s": "harness-common",
+      "r": "invokes",
+      "o": "curl",
+      "c": 0.8
+    },
+    {
+      "s": "test-pi-harness",
+      "r": "tests",
+      "o": "pi-harness",
+      "c": 1.0
+    },
+    {
+      "s": "test-coding-agent",
+      "r": "reads_env",
+      "o": "LARQL_PORT",
+      "c": 0.7
+    },
+    {
+      "s": "test-coding-agent",
+      "r": "tests",
+      "o": "coding-agent",
+      "c": 1.0
+    },
+    {
+      "s": "test-coding-agent",
+      "r": "invokes",
+      "o": "goose",
+      "c": 0.8
+    },
+    {
+      "s": "test-coding-agent",
+      "r": "invokes",
+      "o": "ss",
+      "c": 0.8
+    },
+    {
+      "s": "test-coding-agent",
+      "r": "invokes",
+      "o": "larql",
+      "c": 0.8
+    },
+    {
+      "s": "test-coding-agent",
+      "r": "invokes",
+      "o": "timeout",
+      "c": 0.8
+    },
+    {
+      "s": "pi",
+      "r": "invokes",
+      "o": "awk",
+      "c": 0.8
+    },
+    {
+      "s": "curl",
+      "r": "mocks",
+      "o": "curl",
+      "c": 1.0
+    },
+    {
+      "s": "curl",
+      "r": "invokes",
+      "o": "larql",
+      "c": 0.8
+    },
+    {
+      "s": "larql",
+      "r": "mocks",
+      "o": "larql",
+      "c": 1.0
+    },
+    {
+      "s": "larql",
+      "r": "invokes",
+      "o": "larql",
+      "c": 0.8
+    },
+    {
+      "s": "goose",
+      "r": "mocks",
+      "o": "goose",
+      "c": 1.0
+    },
+    {
+      "s": "goose",
+      "r": "invokes",
+      "o": "goose",
+      "c": 0.8
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "usage",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "_check_ollama",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "_warmup_ollama_model",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "_repair_ollama",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "_setup_cgroup",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "_enroll_ollama_in_cgroup",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "cmd_status",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "cmd_repair",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "_select_provider_model",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "defines",
+      "o": "cmd_run",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "defines",
+      "o": "usage",
       "c": 1.0
     },
     {
       "s": "coding-agent",
       "r": "defines",
       "o": "_check_larql",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "defines",
+      "o": "_larql_find_server_pid",
       "c": 1.0
     },
     {
@@ -117,7 +438,7 @@
     {
       "s": "coding-agent",
       "r": "defines",
-      "o": "_larql_find_server_pid",
+      "o": "_start_larql_server",
       "c": 1.0
     },
     {
@@ -129,223 +450,19 @@
     {
       "s": "coding-agent",
       "r": "defines",
-      "o": "_run_goose_larql",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "defines",
       "o": "_run_goose_openrouter",
       "c": 1.0
     },
     {
       "s": "coding-agent",
       "r": "defines",
-      "o": "_start_larql_server",
+      "o": "_run_goose_larql",
       "c": 1.0
     },
     {
-      "s": "coding-agent",
+      "s": "harness-common",
       "r": "defines",
-      "o": "usage",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "implements",
-      "o": "goose-error-detection",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "implements",
-      "o": "larql-provider",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "implements",
-      "o": "larql-server-lifecycle",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "implements",
-      "o": "openrouter-provider",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "implements",
-      "o": "provider-routing",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "invokes",
-      "o": "awk",
-      "c": 0.8
-    },
-    {
-      "s": "coding-agent",
-      "r": "invokes",
-      "o": "curl",
-      "c": 0.8
-    },
-    {
-      "s": "coding-agent",
-      "r": "invokes",
-      "o": "goose",
-      "c": 0.8
-    },
-    {
-      "s": "coding-agent",
-      "r": "invokes",
-      "o": "larql",
-      "c": 0.8
-    },
-    {
-      "s": "coding-agent",
-      "r": "invokes",
-      "o": "ss",
-      "c": 0.8
-    },
-    {
-      "s": "coding-agent",
-      "r": "invokes",
-      "o": "sudo",
-      "c": 0.8
-    },
-    {
-      "s": "coding-agent",
-      "r": "invokes",
-      "o": "timeout",
-      "c": 0.8
-    },
-    {
-      "s": "coding-agent",
-      "r": "is_a",
-      "o": "script",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "CGROUP_NAME",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "CGROUP_ROOT",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "GOOSE_BIN",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "LARQL_BIN",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "LARQL_INFERENCE_TIMEOUT",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "LARQL_LOG_FILE",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "LARQL_NO_CGROUP",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "LARQL_PORT",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "LARQL_START_TIMEOUT",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "LARQL_VINDEX",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "OPENROUTER_CHECK_URL",
-      "c": 1.0
-    },
-    {
-      "s": "coding-agent",
-      "r": "sets_env",
-      "o": "OPENROUTER_MODEL",
-      "c": 1.0
-    },
-    {
-      "s": "curl",
-      "r": "defines",
-      "o": "_log",
-      "c": 1.0
-    },
-    {
-      "s": "curl",
-      "r": "invokes",
-      "o": "larql",
-      "c": 0.8
-    },
-    {
-      "s": "curl",
-      "r": "is_a",
-      "o": "external_binary",
-      "c": 1.0
-    },
-    {
-      "s": "curl",
-      "r": "mocks",
-      "o": "curl",
-      "c": 1.0
-    },
-    {
-      "s": "demo-coding-agent",
-      "r": "invokes",
-      "o": "larql",
-      "c": 0.8
-    },
-    {
-      "s": "goose",
-      "r": "invokes",
-      "o": "goose",
-      "c": 0.8
-    },
-    {
-      "s": "goose",
-      "r": "is_a",
-      "o": "external_binary",
-      "c": 1.0
-    },
-    {
-      "s": "goose",
-      "r": "mocks",
-      "o": "goose",
+      "o": "_check_http",
       "c": 1.0
     },
     {
@@ -355,255 +472,21 @@
       "c": 1.0
     },
     {
-      "s": "harness-common",
-      "r": "implements",
-      "o": "openrouter-health-check",
-      "c": 1.0
-    },
-    {
-      "s": "harness-common",
-      "r": "invokes",
-      "o": "curl",
-      "c": 0.8
-    },
-    {
-      "s": "harness-common",
-      "r": "is_a",
-      "o": "library",
-      "c": 1.0
-    },
-    {
-      "s": "harness-common",
-      "r": "reads_env",
-      "o": "OPENROUTER_CHECK_URL",
-      "c": 0.7
-    },
-    {
-      "s": "larql",
-      "r": "invokes",
-      "o": "larql",
-      "c": 0.8
-    },
-    {
-      "s": "larql",
-      "r": "is_a",
-      "o": "external_binary",
-      "c": 1.0
-    },
-    {
-      "s": "larql",
-      "r": "mocks",
-      "o": "larql",
-      "c": 1.0
-    },
-    {
-      "s": "pi",
-      "r": "invokes",
-      "o": "awk",
-      "c": 0.8
-    },
-    {
-      "s": "pi-harness",
-      "r": "calls",
-      "o": "_check_ollama",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "calls",
-      "o": "_check_openrouter",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "calls",
-      "o": "_enroll_ollama_in_cgroup",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "calls",
-      "o": "_select_provider_model",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "calls",
-      "o": "_setup_cgroup",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "calls",
-      "o": "_warmup_ollama_model",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
+      "s": "test-pi-harness",
       "r": "defines",
-      "o": "_check_ollama",
+      "o": "setup_cgroup_tmpdir",
       "c": 1.0
     },
     {
-      "s": "pi-harness",
+      "s": "test-pi-harness",
       "r": "defines",
-      "o": "_enroll_ollama_in_cgroup",
+      "o": "assert_contains",
       "c": 1.0
     },
     {
-      "s": "pi-harness",
+      "s": "test-pi-harness",
       "r": "defines",
-      "o": "_repair_ollama",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "defines",
-      "o": "_select_provider_model",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "defines",
-      "o": "_setup_cgroup",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "defines",
-      "o": "_warmup_ollama_model",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "defines",
-      "o": "cmd_repair",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "defines",
-      "o": "cmd_run",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "defines",
-      "o": "cmd_status",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "defines",
-      "o": "usage",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "implements",
-      "o": "cgroup-enforcement",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "implements",
-      "o": "ollama-provider",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "implements",
-      "o": "openrouter-provider",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "invokes",
-      "o": "curl",
-      "c": 0.8
-    },
-    {
-      "s": "pi-harness",
-      "r": "invokes",
-      "o": "pgrep",
-      "c": 0.8
-    },
-    {
-      "s": "pi-harness",
-      "r": "invokes",
-      "o": "sudo",
-      "c": 0.8
-    },
-    {
-      "s": "pi-harness",
-      "r": "invokes",
-      "o": "timeout",
-      "c": 0.8
-    },
-    {
-      "s": "pi-harness",
-      "r": "is_a",
-      "o": "script",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "reads_env",
-      "o": "CGROUP_NAME",
-      "c": 0.7
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "CGROUP_CPU_RESERVE_CORES",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "CGROUP_ROOT",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "OLLAMA_MODEL",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "OLLAMA_URL",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "OLLAMA_WARMUP_POLL_INTERVAL",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "OLLAMA_WARMUP_TIMEOUT",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "OPENROUTER_CHECK_URL",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "OPENROUTER_MODEL",
-      "c": 1.0
-    },
-    {
-      "s": "pi-harness",
-      "r": "sets_env",
-      "o": "PI_BIN",
+      "o": "assert_exit",
       "c": 1.0
     },
     {
@@ -615,7 +498,7 @@
     {
       "s": "test-coding-agent",
       "r": "defines",
-      "o": "assert_exit",
+      "o": "assert_pass",
       "c": 1.0
     },
     {
@@ -627,91 +510,127 @@
     {
       "s": "test-coding-agent",
       "r": "defines",
-      "o": "assert_pass",
+      "o": "assert_not_contains",
       "c": 1.0
     },
     {
       "s": "test-coding-agent",
-      "r": "invokes",
-      "o": "coding-agent",
-      "c": 1.0
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "invokes",
-      "o": "goose",
-      "c": 0.8
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "invokes",
-      "o": "larql",
-      "c": 0.8
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "invokes",
-      "o": "ss",
-      "c": 0.8
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "invokes",
-      "o": "timeout",
-      "c": 0.8
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "is_a",
-      "o": "test_suite",
-      "c": 1.0
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "reads_env",
-      "o": "LARQL_PORT",
-      "c": 0.7
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "tests",
-      "o": "coding-agent",
-      "c": 1.0
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "uses_mock",
-      "o": "curl",
-      "c": 1.0
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "uses_mock",
-      "o": "goose",
-      "c": 1.0
-    },
-    {
-      "s": "test-coding-agent",
-      "r": "uses_mock",
-      "o": "larql",
-      "c": 1.0
-    },
-    {
-      "s": "test-pi-harness",
-      "r": "defines",
-      "o": "assert_contains",
-      "c": 1.0
-    },
-    {
-      "s": "test-pi-harness",
       "r": "defines",
       "o": "assert_exit",
       "c": 1.0
     },
     {
-      "s": "test-pi-harness",
+      "s": "curl",
       "r": "defines",
-      "o": "setup_cgroup_tmpdir",
+      "o": "_log",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "calls",
+      "o": "_check_openrouter",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "calls",
+      "o": "_check_larql",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "calls",
+      "o": "_start_larql_server",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "calls",
+      "o": "_run_goose_openrouter",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "calls",
+      "o": "_run_goose_larql",
+      "c": 1.0
+    },
+    {
+      "s": "_start_larql_server",
+      "r": "calls",
+      "o": "_check_larql",
+      "c": 1.0
+    },
+    {
+      "s": "_start_larql_server",
+      "r": "calls",
+      "o": "_larql_find_server_pid",
+      "c": 1.0
+    },
+    {
+      "s": "_start_larql_server",
+      "r": "calls",
+      "o": "_enroll_larql_in_cgroup",
+      "c": 1.0
+    },
+    {
+      "s": "_run_goose_openrouter",
+      "r": "calls",
+      "o": "_run_goose_call",
+      "c": 1.0
+    },
+    {
+      "s": "_run_goose_larql",
+      "r": "calls",
+      "o": "_run_goose_call",
+      "c": 1.0
+    },
+    {
+      "s": "_larql_cleanup",
+      "r": "calls",
+      "o": "_LARQL_SERVER_PID",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "calls",
+      "o": "_check_openrouter",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "calls",
+      "o": "_check_ollama",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "calls",
+      "o": "_setup_cgroup",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "calls",
+      "o": "_enroll_ollama_in_cgroup",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "calls",
+      "o": "_warmup_ollama_model",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "calls",
+      "o": "_select_provider_model",
+      "c": 1.0
+    },
+    {
+      "s": "test-coding-agent",
+      "r": "invokes",
+      "o": "coding-agent",
       "c": 1.0
     },
     {
@@ -721,21 +640,105 @@
       "c": 1.0
     },
     {
-      "s": "test-pi-harness",
-      "r": "is_a",
-      "o": "test_suite",
+      "s": "test-coding-agent",
+      "r": "uses_mock",
+      "o": "goose",
       "c": 1.0
     },
     {
-      "s": "test-pi-harness",
-      "r": "tests",
-      "o": "pi-harness",
+      "s": "test-coding-agent",
+      "r": "uses_mock",
+      "o": "larql",
+      "c": 1.0
+    },
+    {
+      "s": "test-coding-agent",
+      "r": "uses_mock",
+      "o": "curl",
       "c": 1.0
     },
     {
       "s": "test-pi-harness",
       "r": "uses_mock",
       "o": "curl",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "implements",
+      "o": "openrouter-provider",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "implements",
+      "o": "larql-provider",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "implements",
+      "o": "provider-routing",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "implements",
+      "o": "larql-server-lifecycle",
+      "c": 1.0
+    },
+    {
+      "s": "coding-agent",
+      "r": "implements",
+      "o": "goose-error-detection",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "implements",
+      "o": "openrouter-provider",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "implements",
+      "o": "ollama-provider",
+      "c": 1.0
+    },
+    {
+      "s": "pi-harness",
+      "r": "implements",
+      "o": "cgroup-enforcement",
+      "c": 1.0
+    },
+    {
+      "s": "harness-common",
+      "r": "implements",
+      "o": "openrouter-health-check",
+      "c": 1.0
+    },
+    {
+      "s": "_run_goose_call",
+      "r": "implements",
+      "o": "rate-limit-detection",
+      "c": 1.0
+    },
+    {
+      "s": "_enroll_larql_in_cgroup",
+      "r": "implements",
+      "o": "cgroup-enrollment",
+      "c": 1.0
+    },
+    {
+      "s": "_start_larql_server",
+      "r": "implements",
+      "o": "server-startup-poll",
+      "c": 1.0
+    },
+    {
+      "s": "_start_larql_server",
+      "r": "implements",
+      "o": "fast-fail-on-launcher-error",
       "c": 1.0
     }
   ]
