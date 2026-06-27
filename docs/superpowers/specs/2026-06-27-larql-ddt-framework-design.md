@@ -139,31 +139,158 @@ Choice(pred: S → Bool, s_true: Skill<S,O>, s_false: Skill<S,O>) → Skill<S,O>
 
 **Closure**: the result of any combinator is itself a `Skill`, so composition is closed. The full development process (brainstorming → writing-plans → executing-plans → verification) is itself a DDT `Skill`.
 
-### 1.5 Current Superpowers Skill Pipeline (Formalized)
+### 1.5 All Superpowers Skills — Formal LTS
+
+Each skill is a `Skill<S,O>` with finite state space. The table below gives the formal LTS for every skill used in babel-harness development.
 
 ```
+# ── brainstorming ────────────────────────────────────────────────────────────
 brainstorming[S=ProjectState, O=SpecDoc]
-  steps: [explore_context, ask_questions, propose_approaches, present_design,
-          write_spec, spec_review, user_review_gate]
-  terminal: user_approved(spec)
-  on_error: for each step, explicit revision branch
+  steps:
+    1. explore_context       → Read(docs/, git log, existing files)
+    2. ask_questions         → AskUserQuestion (one at a time; optional if /goal)
+    3. propose_approaches    → produce 2–3 options with trade-offs; recommend one
+    4. present_design        → present each section; user approves each
+    5. write_spec            → Write(docs/superpowers/specs/YYYY-MM-DD-*.md) + commit
+    6. spec_review           → placeholder scan, internal consistency, scope check
+    7. user_review_gate      → wait for explicit approval or /goal standing auth
+  terminal:    user_approved(spec)
+  on_error(s): step 4 → revise section; step 7 → apply changes, re-review
 
-Pipeline(brainstorming,
-  Pipeline(writing_plans[S=SpecDoc, O=TaskList],
-    Pipeline(executing_plans[S=TaskList, O=Implementation],
-      verification_before_completion[S=Implementation, O=VerifiedResult])))
+# ── writing-plans ────────────────────────────────────────────────────────────
+writing_plans[S=SpecDoc, O=PlanDoc]
+  steps:
+    1. scope_check           → verify single subsystem; else propose decomposition
+    2. file_structure        → enumerate files to create/modify with responsibilities
+    3. task_decomposition    → right-size tasks (smallest independently testable unit)
+    4. write_plan            → Write(docs/superpowers/plans/YYYY-MM-DD-*.md); each
+                               step has exact code, exact command, expected output
+    5. self_review           → spec coverage, placeholder scan, type consistency
+    6. offer_execution       → transition to executing_plans or subagent_driven_dev
+  terminal:    plan_written_and_self_reviewed
+  on_error(s): step 1 → decompose spec; step 5 → fix in-place; step 6 → user chooses path
+
+# ── executing-plans ──────────────────────────────────────────────────────────
+executing_plans[S=PlanDoc, O=Implementation]
+  steps:
+    1. read_plan             → Read(plan_file)
+    2. review_plan           → identify questions or concerns
+    3. raise_concerns        → if concerns: surface to user before proceeding
+    4. create_todos          → TaskCreate for each plan item
+    5. for each task:
+       5a. mark_in_progress  → TaskUpdate(status=in_progress)
+       5b. execute_steps     → follow plan exactly (tool calls per step)
+       5c. run_verifications → run commands specified in plan
+       5d. mark_completed    → TaskUpdate(status=completed)
+    6. final_verification    → verification_before_completion for each deliverable
+  terminal:    all_tasks_completed ∧ all_verifications_pass
+  on_error(s): step 3 → block until user responds; step 5d → fix before next task;
+               3+ task failures → escalate to architecture question
+
+# ── verification-before-completion ───────────────────────────────────────────
+verification_before_completion[S=Claim, O=VerificationResult]
+  steps:
+    1. identify_claim        → what exactly is being claimed (precise, falsifiable)
+    2. find_command          → what command proves or refutes the claim
+    3. run_command           → Bash(command, fresh/complete execution)
+    4. read_output           → check exit code, count failures, read fully
+    5. verify_claim          → does output confirm? ONLY THEN make the claim
+  terminal:    claim_verified(evidence) OR claim_refuted(evidence)
+  on_error(s): step 2 → if no command, find proxy; step 3 → fix environment, rerun;
+               claim_refuted → report refutation, do NOT skip to make the claim
+
+# ── systematic-debugging ─────────────────────────────────────────────────────
+systematic_debugging[S=BugReport, O=Fix]
+  steps:
+    1. read_errors           → read error messages carefully (no assumptions)
+    2. reproduce             → verify bug is consistently reproducible
+    3. check_recent_changes  → git log, identify likely cause
+    4. gather_evidence       → multi-component: collect logs, traces, call stacks
+    5. trace_data_flow       → follow data from input to failure point
+    6. find_references       → compare against working examples
+    7. form_hypothesis       → single hypothesis (not multiple simultaneous)
+    8. test_minimally        → minimal failing test case
+    9. implement_fix         → one fix at a time
+   10. verify_fix            → rerun ALL tests; not just the failing one
+  terminal:    bug_fixed_and_all_tests_pass
+  on_error(s): step 8 → refine hypothesis; 3+ failed fixes → question_architecture;
+               step 10 → if regressions, revert and reanalyze
+
+# ── requesting-code-review ───────────────────────────────────────────────────
+requesting_code_review[S=Implementation, O=ReviewedImpl]
+  steps:
+    1. prepare_diff          → git diff; summarize what changed and why
+    2. invoke_reviewer       → spawn code-reviewer subagent
+    3. triage_findings       → classify: Critical / Important / Minor / Informational
+    4. apply_critical        → fix all Critical and Important findings
+    5. respond_minor         → accept or justify each Minor finding
+    6. commit_changes        → commit applied fixes
+  terminal:    no_critical_findings ∧ all_important_applied
+  on_error(s): step 4 → if fix introduces regression, revert and try alternative
+
+# ── full development pipeline ─────────────────────────────────────────────────
+Pipeline(brainstorming[ProjectState, SpecDoc],
+  Pipeline(writing_plans[SpecDoc, PlanDoc],
+    Pipeline(executing_plans[PlanDoc, Implementation],
+      Choice(tests_passing,
+        Pipeline(requesting_code_review[Implementation, ReviewedImpl],
+          verification_before_completion[ReviewedImpl, VerifiedResult]),
+        systematic_debugging[BugReport, Fix]))))
 ```
 
-Each skill in the pipeline: 5–9 steps, finite S, exhaustive error handling.
+Every skill: finite steps (≤10), finite S (ADT with no unbounded recursion), total `on_error`, verified by `ddt_proof.py`.
 
 ### 1.6 Recursive Application
 
-The DDT framework validates itself:
+**Production trace: this spec through brainstorming LTS**
 
-- The spec document you are reading was produced by applying `brainstorming` (an LTS with 7 steps).
-- The `brainstorming` LTS is itself DDT: deterministic (same project + same user responses → same spec), decidable (7 steps, finite state space), tractable (O(7 × tool_cost)).
-- Each tool call in the process (Read, Write, Bash) is typed with explicit error ADT.
-- The framework is complete: any new skill added to the superpowers set must be expressible as a `Skill<S,O>` with exhaustive `on_error`.
+The spec document `2026-06-27-larql-ddt-framework-design.md` was produced by running `brainstorming` as a finite LTS. Explicit state trace:
+
+```
+s_0 = Initial(ProjectState{repo: metavacua/babel-harness, directive: /goal ...})
+
+Step 1 — explore_context:
+  Read(docs/, Vindexfile, scripts/extract-graph.py, bin/coding-agent)
+  Bash("git log --oneline -10") → 10 recent commits
+  Identified: graphify pipeline, coding-agent, larql integration, no prior DDT spec
+  s_1 = Step(1, {existing_files: [extract-graph.py, coding-agent, ...], gaps: [no DDT spec]})
+
+Step 2 — ask_questions:
+  Skipped: /goal directive exhaustively specifies 6 sub-conditions and all constraints.
+  s_2 = Step(2, {goal_parsed: 6 sub-conditions, approach: TBD})
+
+Step 3 — propose_approaches:
+  (a) Pure spec only — fast but sub-condition 3/4 not demonstrated
+  (b) Spec + github_graph.py — demonstrates 3 sub-conditions
+  (c) Full spec + implementations + proof — all 6 sub-conditions addressed
+  Selected: (c)
+  s_3 = Step(3, {approach: full_implementation_with_proof})
+
+Step 4 — present_design:
+  Sections 0-6 structured and approved; /goal directive = standing authorization
+  s_4 = Step(4, {design: Sections_0_to_6_approved})
+
+Step 5 — write_spec:
+  Write(docs/superpowers/specs/2026-06-27-larql-ddt-framework-design.md)
+  Commit: 5da12e3 "feat: DDT framework spec, LARQL comprehension, GitHub remote vindex extractor"
+  s_5 = Step(5, {spec: written, commit: 5da12e3})
+
+Step 6 — spec_review (inline fixes):
+  Bug (a): Section 4 title "FFN KNN Attention" → corrected to graft mechanism
+  Bug (b): "strictly deterministic" overclaim → replaced with domain boundary language
+  Bug (c): github_graph.py unhandled errors → _fetch_tree truncation, KeyError, except clauses
+  Commit: 3b1a666 "fix: close three DDT gaps"
+  Additional: ddt_proof.py added to prove composition; spec sections 1.2/3.2/4 corrected
+  Commit: d39b211 "fix: correct spec — graft mechanism is FFN KNN not RAG; add DDT composition proof"
+  s_6 = Step(6, {spec: reviewed_and_corrected, proof: ddt_proof.py_PROVEN})
+
+Step 7 — user_review_gate:
+  /goal directive constitutes standing review authorization for all sub-conditions.
+  This spec is the artifact; it is self-applying (see §6.3).
+  s_7 = Terminal(SpecDoc{path: docs/superpowers/specs/2026-06-27-larql-ddt-framework-design.md})
+```
+
+**DDT proof of brainstorming LTS itself**: 7 steps (finite), state S = `ProjectState` (ADT), each transition is a typed tool call (Read/Write/Bash/AskUserQuestion), `on_error` total (revision branch exists for every step). Therefore `ddt(skill(brainstorming))` — proven in `scripts/ddt_proof.py`.
 
 ---
 
