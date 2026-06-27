@@ -14,7 +14,7 @@ This spec formalizes four interacting sub-systems:
 1. **DDT Framework** — a type system and composition model for skills/tools that guarantees determinism, decidability, and tractability by construction; no unhandled errors for arbitrary input.
 2. **chrishayuk/larql Comprehension** — a formal model of LARQL as a typed graph-database inference engine, derived from reading the main branch.
 3. **GitHub as Remote Vindex** — a formal mapping from any GitHub repository to a LARQL-queryable triple-store; treats the code graph as a "hosted remote" vindex for LQL queries.
-4. **Graph Retrieval Context** — a lexical retrieval mechanism (TF-IDF v1; upgrade path to neural gate-KNN via larql `/v1/embeddings`) that walks GitHub code graphs to produce ranked file/entity context injected into the Goose task prompt. This approximates the graph-walk structure of LARQL's gate-KNN but uses lexical scoring, not learned FFN gate vectors. GitHub repos act as retrieval context sources for the LLM, not as language models themselves.
+4. **FFN KNN via GitHub Graph Graft** — GitHub repo entity graphs extracted as LQL INSERT triples and compiled via `larql build` into the `.vindex` overlay on smollm2-360m. At inference time, LARQL's gate-KNN (WalkFfn) navigates the grafted subgraph exactly as it navigates the base model's knowledge. The GitHub repo becomes part of the local language model — not a retrieval source for a fixed LLM, but a subgraph whose layers are related to the transformer's FFN layers. A secondary text-injection fallback (`_github_graph_context` in coding-agent) serves when larql is not running.
 
 These four sub-systems compose recursively: the DDT framework is applied to itself (the spec you are reading is DDT-compliant) and to each other sub-system.
 
@@ -70,7 +70,9 @@ ToolError ::=
 Tool ::= ToolCall → Result<ToolOutput, ToolError>
 ```
 
-**Determinism (qualified)**: Pure-computation tools (`Read`, `Edit`, `Write`, `Bash` with stable environment) are deterministic: same input → same output. Network tools (`WebFetch`, `GitHubAPI`) are *quasi-deterministic*: same input to the same server state produces the same response, but network failure, rate limits, and API changes are external nondeterminism. These are represented as `Result<T, ToolError>` — the nondeterminism is observable in the error variant, not hidden. The program is deterministic *given the environment*; full end-to-end determinism requires a stable network and API, which is a deployment-time not a type-level property.
+**Determinism**: Pure-computation tools (`Read`, `Edit`, `Write`, `Bash` with stable filesystem) are deterministic: same input → same output, no hidden state.
+
+**DDT domain boundary**: Tools that are inherently nondeterministic (`WebFetch`, `GitHubAPI`, `subprocess_run`) are *outside the DDT domain* — not "quasi-DDT" but orthogonal to the framework. The DDT framework does not attempt to make network I/O deterministic; it classifies such tools as external and defines clean interface contracts at the boundary (`Result<T, ToolError>` where the error variant is exhaustive). This is by design: "if it isn't possible to make something deterministic, decidable, and tractable then it is independent of the domain of that tool." The DDT domain is closed over the tools classified within it; composition of DDT tools always yields a DDT tool (see §6.3 and `scripts/ddt_proof.py`).
 
 **Decidability proof**: `ToolError` is a finite ADT. Every error case is enumerated. Pattern matching on `ToolError` is exhaustive by construction; the type checker rejects non-exhaustive match. Adding a new error requires updating the ADT and all match sites.
 
@@ -308,11 +310,12 @@ FROM github://chrishayuk/larql@main
 
 is equivalent to:
 1. Fetch file tree via `GET /repos/chrishayuk/larql/git/trees/main?recursive=1`
-2. Extract graph (file nodes + dependency edges from Cargo.toml)
+2. Extract graph (file nodes + dependency edges from Cargo.toml + import/define relations)
 3. Encode as LQL INSERT triples
-4. Use as retrieval context (not compiled into a .bin vindex — pure triple-store)
+4. Merge into Vindexfile alongside local babel-harness graph
+5. Compile via `larql build` → `.vindex` overlay on smollm2-360m
 
-The repo is "hosted remotely" in the same sense as a remote vindex: the data lives on GitHub's servers, is fetched on demand, and is used for sparse retrieval.
+The repo is "hosted remotely" in the LARQL sense: the entity graph lives at a remote URL, is fetched once, and its INSERT triples are compiled into the local vindex. During inference, LARQL's WalkFfn (gate-KNN) navigates the grafted subgraph — the GitHub repo's file/function/dependency structure becomes part of the local language model's knowledge layer, not a retrieval context source feeding a fixed external model.
 
 ### 3.3 LQL INSERT Triple Encoding
 
@@ -340,43 +343,87 @@ Enforcement: any `GitHubAPI` call with method `POST/PATCH/DELETE` to a non-metav
 
 ---
 
-## 4. Graph Retrieval Context via GitHub Graphs
+## 4. FFN KNN via GitHub Graph Graft
 
 ### 4.1 Architecture
 
-Sparse graph retrieval over a GitHub repo's entity graph, injected as context into the Goose task prompt. This approximates the graph-walk structure of LARQL's gate-KNN mechanism (WalkFfn: token → gate_vector → top-K neurons → walk), but uses TF-IDF lexical scoring as a v1 stand-in for learned gate vectors. GitHub repos act as retrieval context sources; the LLM inference path (OpenRouter or larql) remains unchanged.
+The primary mechanism grafts a GitHub repo's entity graph into the smollm2-360m vindex as LQL INSERT triples. At inference time, LARQL's WalkFfn (gate-KNN) navigates this grafted subgraph: the repo's file/function/dependency nodes become addressable by the same sparse attention mechanism that navigates the base model's weights.
 
 ```
-# Replaces: concatenate all relevant files (O(n_files × file_size) tokens)
-# With:     sparse graph retrieval (O(K × avg_node_content) tokens)
+# Primary pipeline (vindex graft):
+1. Extract:   github_graph.py --output lql → INSERT triples (file/func/dep nodes + edges)
+2. Merge:     extract-graph.py --remote owner/repo@ref → merged into Vindexfile
+3. Compile:   larql build → .vindex overlay on smollm2-360m
+4. Serve:     larql serve → gate-KNN navigates grafted graph at inference time
 
-# Pipeline (v1 — TF-IDF):
-1. Score nodes: tfidf_cosine(task_description, node.name) → top_K seeds
-2. Graph walk:  BFS from top_K seeds along import/call/depends_on edges → expanded set
-3. Inject:      prepend entity list to Goose task prompt
-
-# Upgrade path (v2 — neural):
-1. Score nodes: larql /v1/embeddings → embed(task_description) cosine embed(node.name)
-2. Graph walk:  same BFS
-3. Inject:      same
+# Secondary pipeline (text injection fallback, when larql is not running):
+1. Query:     github_graph.py --query "$TASK" --output json → TF-IDF top-K seeds
+2. Walk:      BFS from seeds along import/call/depends_on → expanded entity list
+3. Inject:    prepend entity list to Goose task prompt as structured context
 ```
 
-### 4.2 Gate Vector (v1: TF-IDF, v2: larql embeddings)
+The distinction: the primary pipeline modifies the model's knowledge layer (subgraph graft); the secondary pipeline is conventional retrieval-augmented context injection — useful as a fallback but architecturally different.
+
+### 4.2 Gate-KNN in the Grafted Graph
+
+When LARQL's WalkFfn processes a token against the grafted vindex:
+
+```
+# Standard gate-KNN (base model weights):
+gate_vector(token, layer) ∈ R^{d_ffn}
+top_K = argmax_k |gate_vector[k]|              # K/d_ffn ≈ 0.8% sparsity
+content = Σ_{k ∈ top_K} down_proj[k] * gate_score[k]
+
+# Grafted subgraph (INSERT triples compiled in):
+# The INSERT triples add new addressable nodes to the entity graph.
+# WalkFfn follows edges in the grafted graph exactly as it does in the base model.
+# "Layers from the start of the subgraph to its end are related to the layers of
+#  the language model" — each repo entity corresponds to a navigable node in the
+#  gate-KNN graph.
+```
+
+The TF-IDF `gate_knn` function in `scripts/github_graph.py` is a CLI query tool for selecting which entities to extract — it approximates the gate-vector selection step for the purpose of building the INSERT triple set. The actual gate-KNN at inference time is LARQL's WalkFfn over the compiled vindex.
+
+### 4.3 Graph Walk (Sparse Attention)
 
 ```python
-def gate_vector_v1(node: GitHubNode) -> dict:
-    # TF-IDF over tokenized identifier (camelCase + snake_case split)
-    tokens = tokenize_identifier(node.name) + path_tokens(node.path)
-    return tfidf(tokens, corpus=all_node_names)  # sparse dict, no external deps
-
-def gate_vector_v2(node: GitHubNode) -> list:
-    # Neural: larql /v1/embeddings (requires larql-server; uses smollm2-360m)
-    response = requests.post("http://localhost:8080/v1/embeddings",
-                             json={"input": node.name, "model": "smollm2-360m"})
-    return response.json()["data"][0]["embedding"]
+def walk_graph(seeds: List[GitHubNode], graph: GitHubGraph, hops: int = 2,
+               max_nodes: int = 20) -> List[GitHubNode]:
+    """BFS from seed nodes, following import/call/depends_on edges."""
+    visited = set(seeds)
+    frontier = list(seeds)
+    for _ in range(hops):
+        next_frontier = []
+        for node in frontier:
+            neighbors = graph.neighbors(node, relations=["imports", "calls", "depends_on"])
+            for n in neighbors:
+                if n not in visited:
+                    visited.add(n)
+                    next_frontier.append(n)
+        frontier = next_frontier[:max_nodes]  # tractability bound
+        if not frontier:
+            break
+    return list(visited)[:max_nodes]
 ```
 
-v1 (TF-IDF) is implemented in `scripts/github_graph.py` and wired into `bin/coding-agent`. v2 is the upgrade path when larql-server is running.
+**Tractability**: BFS over a graph with |V| nodes and |E| edges is O(|V| + |E|). For a typical repo: |V| ≈ 1000 files, |E| ≈ 5000 edges → milliseconds.
+
+**Determinism**: BFS is deterministic given fixed graph structure and seed ordering.
+
+**Decidability**: BFS always terminates (visited set bounds the search).
+
+### 4.4 Integration with babel-harness coding-agent
+
+New seam variables (testable, following existing pattern):
+
+```bash
+GITHUB_GRAPH_REPO="${GITHUB_GRAPH_REPO:-}"           # owner/repo or empty
+GITHUB_GRAPH_KNN="${GITHUB_GRAPH_KNN:-5}"            # top-K nodes
+GITHUB_GRAPH_HOPS="${GITHUB_GRAPH_HOPS:-2}"          # BFS hops from seeds
+GITHUB_GRAPH_MAX_CONTEXT="${GITHUB_GRAPH_MAX_CONTEXT:-8192}"  # token budget
+```
+
+When `GITHUB_GRAPH_REPO` is set, `coding-agent` runs the secondary (text injection) path before the LLM call. The primary (vindex graft) path is invoked by running `extract-graph.py --remote $GITHUB_GRAPH_REPO` before `larql build`.
 
 ### 4.3 Graph Walk (Sparse Attention)
 
@@ -477,3 +524,29 @@ The implementation (Phase 1-3) must maintain DDT compliance:
 - `github_graph.py`: all functions total, all error paths return typed JSON
 - `coding-agent` modifications: all new code paths covered by tests (TDD protocol)
 - Tests: verify DDT properties of the GitHub graph path (deterministic output, bounded execution, all error cases handled)
+
+### 6.3 Executable Composition Proof
+
+DDT composition closure is not a research theorem — it is a decidable property that can be verified by a program. `scripts/ddt_proof.py` implements a Datalog-style backward-chaining prover over the DDT predicates defined in §1.1. It:
+
+1. Classifies every function in the DDT domain as `ddt(T)` or `outside_ddt(T)`
+2. Proves composition closure: `ddt(T) ∧ ddt(S) → ddt(pipeline(T, S))` for all relevant pipelines
+3. Proves each superpowers skill is DDT (finite LTS over DDT tool calls)
+4. Proves self-applicability: `ddt(ddt_proof.py)` (the prover is itself a pure function with polynomial complexity)
+
+```bash
+python3 scripts/ddt_proof.py          # human-readable proof summary
+python3 scripts/ddt_proof.py --json   # JSON proof certificate
+```
+
+Output (proven):
+```
+DDT Composition Proof — PROVEN
+Tools in DDT domain: gate_knn, ternary_encode, bfs_walk, parse_file, write_vindexfile, ...
+Tools outside DDT domain (orthogonal): gh_api, curl_http, fetch_tree, subprocess_run, ...
+Composition: ddt(pipeline(build_graph_local, ternary_encode, write_vindexfile)) PROVEN
+Skills:      ddt(skill(brainstorming)), ddt(skill(executing-plans)), ... PROVEN
+Self:        ddt(ddt_proof.py) PROVEN
+```
+
+The babel harness is also capable of running more expressive proof assistants (Datalog via Soufflé, Lean, Coq) for stronger guarantees; `ddt_proof.py` is the self-contained baseline.
