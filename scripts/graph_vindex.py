@@ -15,6 +15,7 @@ from typing import Literal
 import numpy as np
 import networkx as nx
 from scipy import linalg
+from scipy.sparse.linalg import eigsh as _sparse_eigsh
 
 Triple = tuple[str, str, str, float]  # (subject, relation, object, confidence)
 
@@ -68,8 +69,24 @@ def compute_spectral_assignment(
     if not nodes:
         return {}
 
-    L = nx.normalized_laplacian_matrix(G.to_undirected(), nodelist=nodes).toarray()
-    eigenvalues, eigenvectors = linalg.eigh(L)  # ascending order
+    n = len(nodes)
+    L_sparse = nx.normalized_laplacian_matrix(G.to_undirected(), nodelist=nodes)
+    # Request num_layers+1 smallest eigenvectors (includes trivial zero).
+    # Clamp to n-1 since eigsh requires k < n.
+    k = min(num_layers + 1, n - 1)
+    if k < 1:
+        # Degenerate: single node — skip to early return below
+        k = 1
+    try:
+        eigenvalues, eigenvectors = _sparse_eigsh(L_sparse, k=k, which="SM", tol=1e-3)
+    except Exception:
+        rel_fallback = {r: 0 for _, r, _, _ in triples}
+        return {**{v: 0 for v in nodes}, **rel_fallback}
+
+    # eigsh returns in arbitrary order — sort ascending
+    _sort_idx = np.argsort(eigenvalues)
+    eigenvalues = eigenvalues[_sort_idx]
+    eigenvectors = eigenvectors[:, _sort_idx]
 
     nontrivial = eigenvalues > 1e-10
     if not nontrivial.any():
