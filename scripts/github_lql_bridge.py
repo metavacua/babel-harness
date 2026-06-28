@@ -29,6 +29,8 @@ from graph_vindex import build_graph_vindex
 
 Triple = tuple[str, str, str, float]
 
+_INSERT_RE = re.compile(r'^INSERT\s+"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"', re.MULTILINE)
+
 app = FastAPI()
 _state: dict = {}
 
@@ -41,8 +43,7 @@ def _fetch_triples(repo: str, ref: str) -> list[Triple]:
     )
     if result.returncode != 0:
         raise RuntimeError(f"github_graph.py failed:\n{result.stderr[:500]}")
-    pattern = re.compile(r'^INSERT\s+"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"', re.MULTILINE)
-    return [(m.group(1), m.group(2), m.group(3), 1.0) for m in pattern.finditer(result.stdout)]
+    return [(m.group(1), m.group(2), m.group(3), 1.0) for m in _INSERT_RE.finditer(result.stdout)]
 
 
 def _select_subgraph(triples: list[Triple], max_nodes: int) -> list[Triple]:
@@ -196,7 +197,7 @@ def main() -> None:
     if args.triples_file:
         text = pathlib.Path(args.triples_file).read_text()
         pattern = re.compile(r'^INSERT\s+"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"', re.MULTILINE)
-        triples = [(m.group(1), m.group(2), m.group(3), 1.0) for m in pattern.finditer(text)]
+        triples = [(m.group(1), m.group(2), m.group(3), 1.0) for m in _INSERT_RE.finditer(text)]
         print(f"  {len(triples)} triples loaded from {args.triples_file}")
     else:
         print(f"Fetching triples: github://{args.repo}@{args.ref}...")
@@ -205,8 +206,13 @@ def main() -> None:
         print(f"  {len(triples)} triples, {rel_types} relation types")
 
     if args.max_nodes > 0:
+        original_count = len(triples)
         triples = _select_subgraph(triples, args.max_nodes)
-        print(f"  Subgraph: {len(triples)} triples (top {args.max_nodes} entities by degree)")
+        if len(triples) < original_count:
+            print(f"  WARNING: graph truncated to top {len(triples)} triples by subject degree"
+                  f" ({original_count} total). Pass --max-nodes 0 for the full graph.")
+        else:
+            print(f"  Subgraph: {len(triples)} triples")
 
     seed = args.seed or (triples[0][0] if triples else "larql-vindex")
 

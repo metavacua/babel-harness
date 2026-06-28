@@ -44,8 +44,8 @@ def test_select_subgraph_limits_by_degree():
         ("leaf_a", "imports", "a", 1.0),
     ]
     result = _select_subgraph(triples, max_nodes=1)
-    subjects = {s for s, _, _, _ in result}
-    assert subjects == {"hub"}, "only the highest-degree subject should remain"
+    assert len(result) == 1, "max_nodes=1 should return exactly 1 triple"
+    assert result[0][0] == "hub", "the single triple should belong to the highest-degree subject"
 
 
 def test_select_subgraph_max_nodes_zero_returns_all():
@@ -56,6 +56,7 @@ def test_select_subgraph_max_nodes_zero_returns_all():
 def test_select_subgraph_max_nodes_exceeds_entities_returns_all():
     triples = [("a", "r", "b", 1.0)]
     assert _select_subgraph(triples, max_nodes=999) == triples
+
 
 REPO = pathlib.Path(__file__).parent.parent
 SCRIPTS = REPO / "scripts"
@@ -127,12 +128,14 @@ def test_walk_returns_hits_and_divergence(bridge_url):
 
 def test_walk_divergence_log_accumulates(bridge_url):
     import httpx
+    r0 = httpx.get(f"{bridge_url}/v1/divergence-log", timeout=_TIMEOUT)
+    count_before = len(r0.json()["log"])
     httpx.get(f"{bridge_url}/v1/walk", params={"prompt": "entity_walk", "top": 3},
               timeout=_TIMEOUT)
     r = httpx.get(f"{bridge_url}/v1/divergence-log", timeout=_TIMEOUT)
     assert r.status_code == 200
     log = r.json()["log"]
-    assert len(log) >= 1
+    assert len(log) == count_before + 1, "one new entry should be appended per walk call"
     assert "jaccard" in log[-1]
 
 
