@@ -45,6 +45,22 @@ def _fetch_triples(repo: str, ref: str) -> list[Triple]:
     return [(m.group(1), m.group(2), m.group(3), 1.0) for m in pattern.finditer(result.stdout)]
 
 
+def _select_subgraph(triples: list[Triple], max_nodes: int) -> list[Triple]:
+    """Return the top-max_nodes triples ranked by subject out-degree.
+
+    Each triple becomes one vindex.insert() call (~0.35s), so this directly
+    bounds startup: max_nodes * 0.35s * 2 vindexes ≈ max_nodes * 0.7s.
+    Default 100: ~70s build vs ~68 min for the full 5807-triple graph.
+    Use --max-nodes 0 for full-graph offline builds.
+    """
+    if max_nodes <= 0:
+        return triples
+    out_degree: dict[str, int] = {}
+    for s, _, _, _ in triples:
+        out_degree[s] = out_degree.get(s, 0) + 1
+    return sorted(triples, key=lambda t: -out_degree.get(t[0], 0))[:max_nodes]
+
+
 def _hit_to_dict(h: object) -> dict:
     return {
         "layer": h.layer,
@@ -55,7 +71,7 @@ def _hit_to_dict(h: object) -> dict:
 
 
 @app.get("/v1/stats")
-def stats():
+async def stats():
     v = _state["vindex_topo"]
     triples = _state["triples"]
     n = v.num_layers
@@ -78,7 +94,7 @@ def stats():
 
 
 @app.get("/v1/walk")
-def walk(
+async def walk(
     prompt: str = Query(...),
     top: int = Query(5),
     layers: Optional[str] = Query(None),
@@ -114,7 +130,7 @@ def walk(
 
 
 @app.get("/v1/describe")
-def describe(
+async def describe(
     entity: str = Query(...),
     band: str = Query("knowledge"),
     verbose: bool = Query(False),
@@ -130,7 +146,7 @@ def describe(
 
 
 @app.get("/v1/relations")
-def relations():
+async def relations():
     counts: dict[str, int] = {}
     for _, r, _, _ in _state["triples"]:
         counts[r] = counts.get(r, 0) + 1
@@ -139,7 +155,7 @@ def relations():
 
 
 @app.get("/v1/select")
-def select(
+async def select(
     entity: Optional[str] = Query(None),
     relation: Optional[str] = Query(None),
     limit: int = Query(20),
@@ -157,7 +173,7 @@ def select(
 
 
 @app.get("/v1/divergence-log")
-def divergence_log():
+async def divergence_log():
     return {"log": _state["divergence_log"]}
 
 
@@ -169,12 +185,28 @@ def main() -> None:
     parser.add_argument("--base-vindex", required=True, dest="base_vindex")
     parser.add_argument("--seed", default="",
                         help="Seed entity for topological assignment (default: first triple subject)")
+    parser.add_argument("--max-nodes", type=int, default=100, dest="max_nodes",
+                        help="Top-N triples by subject out-degree (0=all). Default 100 "
+                             "keeps startup under 3 min; use 0 for full-graph offline builds.")
+    parser.add_argument("--triples-file", default="", dest="triples_file",
+                        help="Read LQL INSERT triples from file instead of calling GitHub API. "
+                             "Intended for testing and offline/cached use.")
     args = parser.parse_args()
 
-    print(f"Fetching triples: github://{args.repo}@{args.ref}...")
-    triples = _fetch_triples(args.repo, args.ref)
-    rel_types = len({r for _, r, _, _ in triples})
-    print(f"  {len(triples)} triples, {rel_types} relation types")
+    if args.triples_file:
+        text = pathlib.Path(args.triples_file).read_text()
+        pattern = re.compile(r'^INSERT\s+"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"', re.MULTILINE)
+        triples = [(m.group(1), m.group(2), m.group(3), 1.0) for m in pattern.finditer(text)]
+        print(f"  {len(triples)} triples loaded from {args.triples_file}")
+    else:
+        print(f"Fetching triples: github://{args.repo}@{args.ref}...")
+        triples = _fetch_triples(args.repo, args.ref)
+        rel_types = len({r for _, r, _, _ in triples})
+        print(f"  {len(triples)} triples, {rel_types} relation types")
+
+    if args.max_nodes > 0:
+        triples = _select_subgraph(triples, args.max_nodes)
+        print(f"  Subgraph: {len(triples)} triples (top {args.max_nodes} entities by degree)")
 
     seed = args.seed or (triples[0][0] if triples else "larql-vindex")
 
