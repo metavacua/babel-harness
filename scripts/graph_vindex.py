@@ -73,7 +73,8 @@ def compute_spectral_assignment(
 
     nontrivial = eigenvalues > 1e-10
     if not nontrivial.any():
-        return {v: 0 for v in nodes}
+        rel_layer_zero = {r: 0 for _, r, _, _ in triples}
+        return {**{v: 0 for v in nodes}, **rel_layer_zero}
 
     lambda_min = float(eigenvalues[nontrivial][0])
     lambda_max = float(eigenvalues[-1])

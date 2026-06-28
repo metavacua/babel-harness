@@ -53,6 +53,7 @@ def test_spectral_covers_all_nodes_and_relations():
 def test_spectral_single_node():
     m = compute_spectral_assignment([("A", "self", "A", 1.0)], num_layers=4)
     assert "A" in m and 0 <= m["A"] <= 3
+    assert "self" in m and 0 <= m["self"] <= 3
 
 
 def test_assignments_cover_same_keys():
