@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Literal
 import numpy as np
 import networkx as nx
-from scipy import linalg
 from scipy.sparse.linalg import eigsh as _sparse_eigsh
 
 Triple = tuple[str, str, str, float]  # (subject, relation, object, confidence)
@@ -35,7 +34,7 @@ def compute_topological_assignment(
     except nx.NetworkXError:
         distances = {}
 
-    D = max(distances.values()) if distances else 1
+    D = max(distances.values()) or 1  # guard: D=0 when seed has no outgoing edges
     fallback = num_layers // 2
 
     node_layers: dict[str, int] = {}

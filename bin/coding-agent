@@ -230,6 +230,9 @@ if [ -z "$TASK" ]; then
   exit 1
 fi
 
+# Capture original task for bridge WALK query before any augmentation
+_TASK_FOR_WALK="${TASK:-}"
+
 # --- GitHub graph context injection (best-effort, non-blocking) ---
 if [ -n "$GITHUB_GRAPH_REPO" ]; then
   _graph_ctx=$(_github_graph_context "$GITHUB_GRAPH_REPO" "$TASK")
@@ -243,9 +246,11 @@ fi
 if [[ -n "${GITHUB_LQL_BRIDGE_URL:-}" ]]; then
   LARQL_BIN="${LARQL_BIN:-$HOME/larql/target/release/larql}"
   if [[ -x "$LARQL_BIN" ]]; then
+    # Strip double-quotes from walk prompt to avoid malformed LQL statement
+    _walk_prompt="${_TASK_FOR_WALK//\"/}"
     _BRIDGE_CONTEXT=$("$LARQL_BIN" lql \
         "$(printf 'USE REMOTE "%s"; WALK "%s" TOP 10;' \
-            "$GITHUB_LQL_BRIDGE_URL" "${TASK:-}")" \
+            "$GITHUB_LQL_BRIDGE_URL" "${_walk_prompt:0:120}")" \
       2>/dev/null || true)
     if [[ -n "$_BRIDGE_CONTEXT" ]]; then
       TASK="${TASK:-}

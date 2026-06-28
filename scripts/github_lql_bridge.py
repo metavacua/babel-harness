@@ -196,7 +196,6 @@ def main() -> None:
 
     if args.triples_file:
         text = pathlib.Path(args.triples_file).read_text()
-        pattern = re.compile(r'^INSERT\s+"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"', re.MULTILINE)
         triples = [(m.group(1), m.group(2), m.group(3), 1.0) for m in _INSERT_RE.finditer(text)]
         print(f"  {len(triples)} triples loaded from {args.triples_file}")
     else:

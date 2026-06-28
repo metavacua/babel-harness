@@ -102,7 +102,7 @@ def bridge_url(tmp_path_factory):
     proc.wait(timeout=10)
 
 
-_TIMEOUT = 30  # entity_walk cold calls take ~3s each; /v1/walk calls two → ~7s
+_TIMEOUT = 120  # entity_walk cold calls take 3–60s under memory pressure; /v1/walk calls two
 
 
 def test_stats_model_is_github(bridge_url):
