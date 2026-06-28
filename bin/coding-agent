@@ -239,6 +239,25 @@ if [ -n "$GITHUB_GRAPH_REPO" ]; then
   fi
 fi
 
+# Graph knowledge via live larql bridge (Theory A/B experimental mode)
+if [[ -n "${GITHUB_LQL_BRIDGE_URL:-}" ]]; then
+  LARQL_BIN="${LARQL_BIN:-$HOME/larql/target/release/larql}"
+  if [[ -x "$LARQL_BIN" ]]; then
+    _BRIDGE_CONTEXT=$("$LARQL_BIN" lql \
+        "$(printf 'USE REMOTE "%s"; WALK "%s" TOP 10;' \
+            "$GITHUB_LQL_BRIDGE_URL" "${TASK:-}")" \
+      2>/dev/null || true)
+    if [[ -n "$_BRIDGE_CONTEXT" ]]; then
+      TASK="${TASK:-}
+## Graph Knowledge (github-as-FFN bridge: $GITHUB_LQL_BRIDGE_URL)
+\`\`\`
+$_BRIDGE_CONTEXT
+\`\`\`
+"
+    fi
+  fi
+fi
+
 # --- Model override: larql/VINDEX forces local path regardless of OpenRouter ---
 if [ -n "$MODEL_OVERRIDE" ]; then
   case "$MODEL_OVERRIDE" in

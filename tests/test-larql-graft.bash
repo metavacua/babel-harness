@@ -169,6 +169,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Tests 5–6: Bridge smoke (only when GITHUB_LQL_BRIDGE_URL set)
+# ---------------------------------------------------------------------------
+section "5–6: Bridge smoke tests (GITHUB_LQL_BRIDGE_URL)"
+
+if [[ -n "${GITHUB_LQL_BRIDGE_URL:-}" ]]; then
+  STATS=$(curl -sf "${GITHUB_LQL_BRIDGE_URL}/v1/stats" 2>/dev/null || echo '{}')
+  if echo "$STATS" | python3 -c \
+      "import sys,json; d=json.load(sys.stdin); assert d.get('model','').startswith('github://')" \
+      2>/dev/null; then
+    pass "bridge /v1/stats — model starts with github://"
+  else
+    fail "bridge /v1/stats — model field missing or wrong: $STATS"
+  fi
+
+  WALK=$(curl -sf "${GITHUB_LQL_BRIDGE_URL}/v1/walk?prompt=gate_knn&top=3" 2>/dev/null || echo '{}')
+  if echo "$WALK" | python3 -c \
+      "import sys,json; d=json.load(sys.stdin); assert 'hits' in d and 'divergence' in d" \
+      2>/dev/null; then
+    pass "bridge /v1/walk — hits + divergence present"
+  else
+    fail "bridge /v1/walk — missing hits or divergence: $WALK"
+  fi
+else
+  echo "  SKIP bridge tests (set GITHUB_LQL_BRIDGE_URL=http://... to enable)"
+fi
+
+# ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
 echo ""
