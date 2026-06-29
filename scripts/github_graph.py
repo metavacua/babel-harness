@@ -34,6 +34,7 @@ Environment:
   GH_TOKEN            Alternative GitHub API token
 """
 
+import concurrent.futures
 import json
 import math
 import os
@@ -329,12 +330,20 @@ def build_graph(owner: str, repo: str, ref: str,
         if len(ordered_files) >= content_budget:
             break
 
+    # B4: parallel HTTP prefetch — each gh api call is independent (embarrassingly parallel).
+    # max_workers=5 respects GitHub rate limits (5000 req/hr authenticated, 60/hr unauthenticated).
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        file_futures = {
+            blob["path"]: pool.submit(_fetch_content_raw, owner, repo, blob["path"], ref)
+            for blob in ordered_files
+        }
+
     for blob in ordered_files:
         path = blob["path"]
         lang = _detect_language(path)
         file_id = path
         try:
-            content = _fetch_content_raw(owner, repo, path, ref)
+            content = file_futures[path].result()
         except GraphError:
             continue  # skip files we can't fetch — never abort entire graph
 

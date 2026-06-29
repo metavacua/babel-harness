@@ -18,6 +18,7 @@ import subprocess
 import sys
 import math
 from pathlib import Path
+import numpy as np
 
 REPO = Path(__file__).parent.parent
 
@@ -289,40 +290,32 @@ def ternary_encode(entities: list[str], edges: list[tuple],
     n = len(entities)
     idx = {e: i for i, e in enumerate(entities)}
 
-    # Build adjacency matrix (confidence-weighted, directed)
-    A = [[0.0] * n for _ in range(n)]
+    # Build adjacency matrix (confidence-weighted, directed) — O(|edges|)
+    A = np.zeros((n, n), dtype=np.float64)
     edge_relations: dict[tuple[int,int], str] = {}
     for frm, rel, to, conf in edges:
         i, j = idx.get(frm, -1), idx.get(to, -1)
         if i < 0 or j < 0:
             continue
-        if A[i][j] < conf:
-            A[i][j] = conf
+        if A[i, j] < conf:
+            A[i, j] = conf
             edge_relations[(i, j)] = rel
 
-    # Symmetrize: A_sym = (A + A^T) / 2
-    A_sym = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        for j in range(n):
-            A_sym[i][j] = (A[i][j] + A[j][i]) / 2.0
+    # Symmetrize: A_sym = (A + A^T) / 2  — vectorized O(n²) in numpy BLAS
+    A_sym = (A + A.T) / 2.0
 
-    # Degree matrix (diagonal)
-    D_inv_sqrt = [0.0] * n
-    for i in range(n):
-        deg = sum(A_sym[i])
-        D_inv_sqrt[i] = 1.0 / math.sqrt(deg) if deg > 0 else 0.0
+    # Degree vector and D^{-1/2} — vectorized; divide-by-zero → 0 (isolated nodes)
+    deg = A_sym.sum(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        D_inv_sqrt = np.where(deg > 0, 1.0 / np.sqrt(deg), 0.0)
 
-    # Normalized adjacency: Ã = D^{-1/2} A_sym D^{-1/2}
-    A_norm = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        for j in range(n):
-            A_norm[i][j] = D_inv_sqrt[i] * A_sym[i][j] * D_inv_sqrt[j]
+    # Normalized adjacency: Ã = D^{-1/2} A_sym D^{-1/2} — outer product broadcast
+    A_norm = np.outer(D_inv_sqrt, D_inv_sqrt) * A_sym
 
     # Adaptive threshold: 0.5 × mean of non-zero |Ã| values
-    nonzero_vals = [abs(A_norm[i][j]) for i in range(n) for j in range(n)
-                    if A_norm[i][j] != 0.0]
     if theta is None:
-        theta = 0.5 * (sum(nonzero_vals) / len(nonzero_vals)) if nonzero_vals else 0.0
+        nonzero = A_norm[A_norm != 0.0]
+        theta = 0.5 * float(np.mean(np.abs(nonzero))) if nonzero.size > 0 else 0.0
 
     # Trit encode — only emit ORIGINAL directed edges that survive the threshold.
     # Symmetrization is used only to compute the importance score (Ã[i,j]).
@@ -331,7 +324,7 @@ def ternary_encode(entities: list[str], edges: list[tuple],
     # original was "file defines function".
     trits = []
     for (i, j), rel in edge_relations.items():
-        v = A_norm[i][j]  # normalized weight for this original edge direction
+        v = float(A_norm[i, j])  # normalized weight for this original edge direction
         if v > theta:
             trit = 1
         elif v < -theta:
