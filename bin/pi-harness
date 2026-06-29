@@ -7,6 +7,7 @@ PI_BIN="${PI_BIN:-$(command -v pi 2>/dev/null || echo "$HOME/.local/share/pi-nod
 OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/models}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
+source "$(dirname "$0")/../lib/harness-common.sh"
 
 # --- Defaults ---
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-auto}"
@@ -27,10 +28,6 @@ Options:
   --model M       Override model, format: provider/model
   -h, --help      Show this help
 EOF
-}
-
-_check_openrouter() {
-  curl -sf --max-time 3 "$OPENROUTER_CHECK_URL" > /dev/null 2>&1
 }
 
 _check_ollama() {

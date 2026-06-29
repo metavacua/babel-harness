@@ -12,8 +12,25 @@ LARQL_PORT="${LARQL_PORT:-8080}"
 LARQL_VINDEX="${LARQL_VINDEX:-smollm2-360m}"
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-qwen/qwen3-coder:free}"
 GOOSE_BIN="${GOOSE_BIN:-goose}"
+source "$(dirname "$0")/../lib/harness-common.sh"
 # larql-server pre-loads weights: ~16s for smollm2-360m (vs 40min for 7B via Ollama)
 LARQL_START_TIMEOUT="${LARQL_START_TIMEOUT:-30}"
+LARQL_LOG_FILE="${LARQL_LOG_FILE:-/tmp/larql-server-${LARQL_PORT}.log}"
+# timeout for a single Goose inference call; 124 = timeout exit code
+LARQL_INFERENCE_TIMEOUT="${LARQL_INFERENCE_TIMEOUT:-120}"
+CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
+CGROUP_NAME="${CGROUP_NAME:-babel-harness}"
+# set LARQL_NO_CGROUP=1 to skip cgroup enrollment (tests, CI, non-Linux)
+LARQL_NO_CGROUP="${LARQL_NO_CGROUP:-0}"
+# GitHub remote vindex: set to "owner/repo" to inject graph retrieval context into the task.
+# TF-IDF lexical retrieval over the repo entity graph; result prepended to Goose task prompt.
+GITHUB_GRAPH_REPO="${GITHUB_GRAPH_REPO:-}"
+GITHUB_GRAPH_REF="${GITHUB_GRAPH_REF:-main}"
+GITHUB_GRAPH_KNN="${GITHUB_GRAPH_KNN:-8}"
+GITHUB_GRAPH_HOPS="${GITHUB_GRAPH_HOPS:-2}"
+GITHUB_GRAPH_MAX_CONTEXT="${GITHUB_GRAPH_MAX_CONTEXT:-2000}"
+GITHUB_GRAPH_SCRIPT="${GITHUB_GRAPH_SCRIPT:-$(dirname "$0")/../scripts/github_graph.py}"
+PYTHON3_BIN="${PYTHON3_BIN:-python3}"
 
 usage() {
   cat <<'EOF'
@@ -28,50 +45,159 @@ Note: quote the TASK string to preserve spaces: coding-agent "write a hello func
 EOF
 }
 
-_check_openrouter() {
-  curl -sf --max-time 3 "$OPENROUTER_CHECK_URL" > /dev/null 2>&1
+_check_larql() {
+  _check_http "http://localhost:${LARQL_PORT}/v1/models"
 }
 
-_check_larql() {
-  curl -sf --max-time 3 "http://localhost:${LARQL_PORT}/v1/models" > /dev/null 2>&1
+_larql_find_server_pid() {
+  # LARQL_SERVER_PID_FILE: test seam — if set, read the PID from this file.
+  if [ -n "${LARQL_SERVER_PID_FILE:-}" ]; then
+    cat "$LARQL_SERVER_PID_FILE" 2>/dev/null || true
+  else
+    # larql exits after spawning larql-server; find the process listening on the port
+    ss -tlpn "sport = :${LARQL_PORT}" 2>/dev/null \
+      | awk -F'pid=' 'NF>1{split($2,a,","); print a[1]; exit}' || true
+  fi
+}
+
+_enroll_larql_in_cgroup() {
+  local pid="$1"
+  [ "$LARQL_NO_CGROUP" = "1" ] && return 0
+  [ -z "$pid" ] && return 0
+  local cg_mem="${CGROUP_ROOT}/memory/${CGROUP_NAME}"
+  local cg_cpu="${CGROUP_ROOT}/cpu/${CGROUP_NAME}"
+  [ -d "$cg_mem" ] || return 0  # cgroup not set up; skip silently
+  echo "$pid" | sudo tee "${cg_mem}/cgroup.procs" > /dev/null 2>&1 || true
+  # cpu cgroup is optional — some cgroup v1 setups only have memory controller
+  if [ -d "$cg_cpu" ]; then
+    echo "$pid" | sudo tee "${cg_cpu}/cgroup.procs" > /dev/null 2>&1 || true
+    echo "coding-agent: enrolled larql-server PID $pid in $CGROUP_NAME cgroup (memory+cpu)" >&2
+  else
+    echo "coding-agent: enrolled larql-server PID $pid in $CGROUP_NAME cgroup (memory only; cpu cgroup absent)" >&2
+  fi
+}
+
+_larql_cleanup() {
+  # kill server first (the long-lived process), then launcher (may still be waiting)
+  kill "${_LARQL_SERVER_PID:-}" 2>/dev/null || true
+  kill "${_LARQL_LAUNCHER_PID:-}" 2>/dev/null || true
 }
 
 _start_larql_server() {
   local vindex="$1"
   echo "coding-agent: starting larql serve $vindex on port $LARQL_PORT..." >&2
-  "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" > /dev/null 2>&1 &
-  local server_pid=$!
+  echo "coding-agent: larql-server log: $LARQL_LOG_FILE" >&2
+  "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" >> "$LARQL_LOG_FILE" 2>&1 &
+  _LARQL_LAUNCHER_PID=$!
+  trap '_larql_cleanup' EXIT
   # larql-server pre-loads weights on startup; poll up to LARQL_START_TIMEOUT seconds
-  local deadline=$(( $(date +%s) + LARQL_START_TIMEOUT ))
-  trap "kill $server_pid 2>/dev/null || true" EXIT
-  while [ "$(date +%s)" -lt "$deadline" ]; do
+  local ticks=$(( LARQL_START_TIMEOUT * 5 ))
+  local i=0 _launcher_reaped=0
+  while [ $i -lt $ticks ]; do
     if _check_larql; then
-      echo "coding-agent: larql serve ready (PID $server_pid)" >&2
-      trap - EXIT
+      # larql exits immediately after spawning larql-server; find the actual server PID
+      _LARQL_SERVER_PID=$(_larql_find_server_pid)
+      echo "coding-agent: larql serve ready (PID ${_LARQL_SERVER_PID:-unknown})" >&2
+      _enroll_larql_in_cgroup "${_LARQL_SERVER_PID:-}"
       return 0
     fi
     sleep 0.2
+    i=$(( i + 1 ))
+    # After sleep, bash reaps any exited background jobs; check if launcher failed
+    if [ "$_launcher_reaped" = "0" ] && [ -n "${_LARQL_LAUNCHER_PID:-}" ] && \
+       ! kill -0 "$_LARQL_LAUNCHER_PID" 2>/dev/null; then
+      _launcher_reaped=1
+      local _le=0
+      wait "$_LARQL_LAUNCHER_PID" 2>/dev/null || _le=$?
+      if [ "$_le" -ne 0 ]; then
+        echo "coding-agent: larql serve exited prematurely (exit $_le) — see $LARQL_LOG_FILE" >&2
+        return 1
+      fi
+    fi
   done
-  echo "coding-agent: timeout waiting for larql serve to start" >&2
+  echo "coding-agent: timeout waiting for larql serve to start — see $LARQL_LOG_FILE" >&2
   return 1
+}
+
+# Run TF-IDF lexical retrieval over a GitHub repo and return a context string.
+# Returns empty string on any failure (non-blocking — graph context is best-effort).
+_github_graph_context() {
+  local repo="$1" task="$2"
+  [ -z "$repo" ] && return 0
+  if ! command -v "$PYTHON3_BIN" >/dev/null 2>&1; then
+    echo "coding-agent: python3 not found — skipping GITHUB_GRAPH_REPO context" >&2
+    return 0
+  fi
+  if [ ! -f "$GITHUB_GRAPH_SCRIPT" ]; then
+    echo "coding-agent: GITHUB_GRAPH_SCRIPT not found: $GITHUB_GRAPH_SCRIPT — skipping" >&2
+    return 0
+  fi
+  echo "coding-agent: querying graph context from $repo (ref=$GITHUB_GRAPH_REF knn=$GITHUB_GRAPH_KNN)" >&2
+  local raw
+  raw=$("$PYTHON3_BIN" "$GITHUB_GRAPH_SCRIPT" \
+    --repo "$repo" \
+    --ref "$GITHUB_GRAPH_REF" \
+    --query "$task" \
+    --knn "$GITHUB_GRAPH_KNN" \
+    --hops "$GITHUB_GRAPH_HOPS" \
+    --max-nodes "$GITHUB_GRAPH_MAX_CONTEXT" \
+    --output json 2>/dev/null) || true
+  [ -z "$raw" ] && return 0
+  # Extract seeds and expanded node list for context injection
+  local seeds
+  seeds=$(printf '%s' "$raw" | "$PYTHON3_BIN" -c "
+import sys, json
+d = json.load(sys.stdin)
+if d.get('ok') and 'seeds' in d:
+    print('Relevant entities (TF-IDF lexical match):')
+    for s in d['seeds']:
+        print(f\"  {s['entity']} (score={s['score']})\")
+    exp = d.get('expanded', [])
+    if exp:
+        print(f'Expanded context ({len(exp)} nodes via BFS):')
+        for e in exp[:20]:
+            print(f'  {e}')
+" 2>/dev/null) || true
+  printf '%s' "$seeds"
+}
+
+# Stream command output to terminal while capturing for error pattern detection.
+# Goose bug: exits 0 on rate limit and similar errors — detect from output.
+_run_goose_call() {
+  local _outfile _gc
+  _outfile=$(mktemp)
+  if "$@" | tee "$_outfile"; then
+    _gc="${PIPESTATUS[0]}"
+    # Goose bug: exits 0 on rate-limit/API errors. Both sentinels always appear together.
+    if grep -qFe "Ran into this error:" "$_outfile" 2>/dev/null && \
+       grep -qFe "Please retry if you think" "$_outfile" 2>/dev/null; then
+      rm -f "$_outfile"
+      return 1
+    fi
+  else
+    _gc="${PIPESTATUS[0]}"
+  fi
+  rm -f "$_outfile"
+  return "$_gc"
 }
 
 _run_goose_openrouter() {
   local model="$1" task="$2"
   echo "coding-agent: provider=openrouter model=$model" >&2
   GOOSE_PROVIDER=openrouter GOOSE_MODEL="$model" GOOSE_MODE=auto \
-    "$GOOSE_BIN" run -t "$task"
+    _run_goose_call "$GOOSE_BIN" run -t "$task"
 }
 
 _run_goose_larql() {
   local vindex="$1" task="$2"
   echo "coding-agent: provider=larql (openai-compat) model=$vindex" >&2
+  # timeout must be INSIDE _run_goose_call (not wrapping it) so PIPESTATUS[0] is the goose exit
   GOOSE_PROVIDER=openai \
     OPENAI_BASE_URL="http://localhost:${LARQL_PORT}/v1" \
     OPENAI_API_KEY=larql \
     GOOSE_MODEL="$vindex" \
     GOOSE_MODE=auto \
-    "$GOOSE_BIN" run -t "$task"
+    _run_goose_call timeout "$LARQL_INFERENCE_TIMEOUT" "$GOOSE_BIN" run -t "$task"
 }
 
 # --- Argument parsing ---
@@ -80,12 +206,22 @@ TASK=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model) MODEL_OVERRIDE="$2"; shift 2 ;;
+    --model)
+      if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
+        echo "coding-agent: --model requires a value (e.g. --model larql/smollm2-360m)" >&2
+        exit 1
+      fi
+      MODEL_OVERRIDE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
+    --) shift; break ;;  # end of options; remaining args are positional
     -*) echo "coding-agent: unknown option: $1" >&2; usage; exit 1 ;;
     # Accumulate positional args so unquoted "write hello function" works as one task
     *) TASK="${TASK:+$TASK }$1"; shift ;;
   esac
+done
+# Collect any remaining positional args after --
+while [[ $# -gt 0 ]]; do
+  TASK="${TASK:+$TASK }$1"; shift
 done
 
 if [ -z "$TASK" ]; then
@@ -94,10 +230,28 @@ if [ -z "$TASK" ]; then
   exit 1
 fi
 
+# --- GitHub graph context injection (best-effort, non-blocking) ---
+if [ -n "$GITHUB_GRAPH_REPO" ]; then
+  _graph_ctx=$(_github_graph_context "$GITHUB_GRAPH_REPO" "$TASK")
+  if [ -n "$_graph_ctx" ]; then
+    TASK="$(printf 'Code graph context from %s:\n%s\n\nTask: %s' \
+      "$GITHUB_GRAPH_REPO" "$_graph_ctx" "$TASK")"
+  fi
+fi
+
 # --- Model override: larql/VINDEX forces local path regardless of OpenRouter ---
 if [ -n "$MODEL_OVERRIDE" ]; then
-  local_provider="${MODEL_OVERRIDE%%/*}"
-  local_model="${MODEL_OVERRIDE#*/}"
+  case "$MODEL_OVERRIDE" in
+    */?*)  # must contain a slash with non-empty model part after it
+      local_provider="${MODEL_OVERRIDE%%/*}"
+      local_model="${MODEL_OVERRIDE#*/}"
+      ;;
+    *)
+      echo "coding-agent: --model requires a non-empty model name after the provider prefix" >&2
+      echo "  e.g. --model larql/smollm2-360m  or  --model openrouter/qwen/qwen3-coder:free" >&2
+      exit 1
+      ;;
+  esac
   if [ "$local_provider" = "larql" ]; then
     if ! _check_larql; then
       _start_larql_server "$local_model" || exit 1
