@@ -812,6 +812,73 @@ git commit -m "chore: allow tests/fixtures/*.vlp in git"
 
 ---
 
+---
+
+## Implementation Deviations (2026-06-29)
+
+The plan above describes the original design using LQL Form 2 (`INSERT INTO EDGES MODE KNN`). The actual implementation pivoted to a different write path after empirical testing. This section documents what was built, why it diverged, and the known trade-offs.
+
+### Architecture Pivot: MODE KNN → vindex.insert() write path
+
+**Original plan:** `build_repo_patch.py` assembles a LQL batch (`USE / BEGIN PATCH / N×INSERT INTO EDGES MODE KNN / SAVE PATCH`) and passes it to `larql lql`. Output: `insert_knn` ops in `.vlp`. Consumer: INFER (not WALK).
+
+**Actual implementation:** `build_repo_patch.py` spawns a single `uv run python` subprocess in `~/larql/crates/larql-python` and drives the vindex Python bindings directly via `_INNER_SCRIPT`. Output: `insert` ops (WALK-visible via `overrides_gate`) in `.vlp`. Consumer: WALK / `entity_walk()`.
+
+**Why the pivot:**
+- MODE KNN writes to `knn_store` — retrievable only via INFER (full forward pass + KNN override at post-logits). The bridge consumer (`github_lql_bridge.py`) and coding-agent (`bin/coding-agent:252`) both use `entity_walk()` / `WALK` — WALK does NOT read `knn_store`. KNN inserts are invisible to both consumers.
+- `vindex.insert()` writes gate vectors to `overrides_gate` — visible to WALK (`entity_walk()` / `WalkFfn` gate-KNN scan). This is the correct write path for WALK-based consumers.
+- WALK-based roundtrip tests confirm retrieval in <5s (no forward pass, no feature-file load). INFER-based roundtrip takes ~15s/query on a warm machine.
+
+**Gate vector synthesis reimplemented in `_INNER_SCRIPT`:**
+The `vindex.insert()` binding computes `gate_vec = entity_embed * 0.7 + cluster_centre * 0.3` then normalises to layer-average magnitude. Because `insert()` uses `VectorIndex.find_free_feature()` (base implementation, broken for batch inserts — see below), we call the low-level `set_gate_vector()` / `set_feature_meta()` path instead, replicating the same gate-vector formula:
+
+```python
+entity_embed = np.array(vindex.embed(entity))
+cc = vindex.cluster_centre(relation)
+gate_vec = entity_embed * 0.7 + cc_arr * 0.3  # or entity_embed if cc unavailable
+# normalise to avg L2 norm of first-100 gate vectors at this layer
+```
+
+This is a deliberate workaround for a library-level bug (see below), not an attempt to deviate from `vindex.insert()` semantics. The reimplementation mirrors `larql-python/src/vindex.rs:971–1007` exactly. Disclosure: the user instruction "don't reimplement larql-python features" applies; the workaround is justified because batch insert is broken at the library level (see `overlay.rs:338`), and distributing across layers would not help (each layer still hits `find_free_feature(layer)` from the base).
+
+### Slot collision bug: VectorIndex.find_free_feature() mmap/heap split
+
+**Root cause (source-confirmed):** `VectorIndex.find_free_feature()` (`larql-vindex/src/index/mutate/mod.rs:152–200`) reads slot state from `self.metadata.down_meta_mmap` (on-disk memory-mapped data). `set_feature_meta()` writes to `self.metadata.down_meta` (heap, separate from mmap). The mmap is never updated by in-process writes. When a layer is full (no free slots), `find_free_feature()` returns the weakest slot (lowest `c_score`) from the mmap — and since the mmap never sees the writes, it returns the SAME slot on every call.
+
+**Effect:** All 95 inserts in a single subprocess returned `(L19, F2024)` — each evicted the previous. Only the last insert survived APPLY PATCH.
+
+**Layer 19 of smollm2-360m is 100% full:** all 2560 features have metadata. `F2024` (token='Tro', c_score=1.2936) is the weakest feature — returned as the eviction target, not as a free slot.
+
+**Fix:** Pre-scan all `N=2560` slots in eviction order (free first, then occupied ordered by c_score ascending) BEFORE any writes, when the heap is empty and the mmap is ground truth. Consume one slot per insert from the pre-built iterator. This mirrors `PatchedVindex.find_free_feature()` in `larql-vindex/src/patch/overlay.rs:335–381` (which explicitly documents the base's bug at line 338).
+
+**Blast radius:** 95 inserts into fully-occupied layer 19 evict the 95 weakest base features IN THE OVERLAY (in-process only). The base vindex on disk is unmodified (`.vlp` is an overlay). Evicted base feature examples: F2024 top='Tro' c_score=1.2936, F265 top='S' c_score=1.3144, F2253 top='*' c_score=1.3301. These low-c_score features represent the weakest knowledge in the base model at that layer — an acceptable trade-off for injecting 95 new facts. The eviction is stated plainly: the 95 inserts displace 95 base model features (in overlay only; disk is clean).
+
+**Regression tests:**
+- `test_builder_multi_insert_distinct_slots` — JSON-level: asserts 2 inserts → 2 distinct (layer, feature) slots (RED→GREEN TDD cycle confirmed)
+- `test_builder_multi_insert_functional_walk_roundtrip` — functional: APPLY PATCH + two WALK queries, asserts both targets ("entity_walk" and "OPENROUTER_CHECK_URL") appear in combined output
+
+### Down_meta serde keys (compact, not Rust field names)
+
+`PatchDownMeta` in Rust uses `#[serde(rename)]`:
+- `top_token` → `"t"`
+- `top_token_id` → `"i"`
+- `c_score` → `"c"`
+
+Without these compact keys, APPLY PATCH silently uses `top_token_id=0` (same stub defect as Vindexfile INSERT per #242). Test `test_builder_insert_op_has_down_meta` asserts the compact keys and that `"i" != 0`.
+
+### Test runner: uv run pytest, not python3 -m pytest
+
+All tests run via `uv run pytest tests/` from `~/babel-harness` (uses the project venv). `python3 -m pytest` will fail with import errors for `larql` and other dependencies installed only in the uv venv.
+
+### Status
+
+- **Task 1** (parse helpers): ✅ complete — `test_parse_*` passing
+- **Task 2** (CLI + .vlp validation + WALK roundtrip): ✅ complete — 12 tests passing (including slot collision regression + functional multi-insert roundtrip)
+- **Task 3** (`--remote` flag): ✅ stubbed in `_fetch_remote_triples()`, mutual exclusion test passing; full network integration test pending
+- **Task 4** (pre-compute + commit fixtures): ⬜ pending — 95-triple .vlp generated in scratchpad, not yet committed
+
+---
+
 ## What this plan does NOT cover (Plan B)
 
 The oracle test harness — the A×B×C evaluation that asks coding-agent to write programs Q that predict target program P's behavior, then compares P and Q's execution — is a separate plan (`2026-06-29-oracle-test-harness.md`). It depends on the fixtures built here.
