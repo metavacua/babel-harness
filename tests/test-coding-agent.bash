@@ -423,5 +423,20 @@ assert_not_contains "larql serve NOT invoked when low memory" "larql serve" "$(c
 rm -f "$calllog"
 
 echo ""
+echo "--- 24: larql server reports model id 'smollm2-360m-src' → GOOSE_MODEL uses that id (B6) ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_LARQL_MODEL_ID="smollm2-360m-src" \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" "write a hello function" 2>&1)
+rc=$?
+assert_exit "exits 0 with server model id" "0" "$rc"
+assert_contains "GOOSE_MODEL uses server-reported id" "GOOSE_MODEL=smollm2-360m-src" "$(cat "$calllog")"
+rm -f "$calllog"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

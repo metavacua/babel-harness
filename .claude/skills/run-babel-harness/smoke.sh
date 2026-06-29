@@ -108,13 +108,16 @@ if [ -x "$LARQL_BIN" ] && [ -x "$LARQL_SERVER" ] && [ -d "$LARQL_VINDEX" ]; then
     ok "larql serve  [port $LARQL_PORT, vindex: $(basename "$LARQL_VINDEX")]"
     # quick gate-KNN query via coding-agent larql path (model name = vindex basename)
     _VNAME=$(basename "$LARQL_VINDEX" .vindex)
+    # B8 fix: capture exit code — a panic makes Goose exit non-zero (HTTP 500 from server).
+    # Previously this grep matched "provider=larql" which appears before inference, masking B7.
+    _CA_EXIT=0
     _CA_OUT=$(LARQL_PORT="$LARQL_PORT" \
       coding-agent --model "larql/$_VNAME" \
-      "say hello" 2>&1 | tail -5) || true
-    if echo "$_CA_OUT" | grep -q "provider=larql\|hello\|goose"; then
-      ok "coding-agent --model larql/* → larql provider used"
+      "say hello" 2>&1 | tail -5) || _CA_EXIT=$?
+    if [ "$_CA_EXIT" -eq 0 ]; then
+      ok "coding-agent --model larql/* → inference succeeded"
     else
-      fail "coding-agent larql path" "unexpected output: $_CA_OUT"
+      fail "coding-agent larql path" "inference failed (exit $_CA_EXIT): $_CA_OUT"
     fi
   else
     fail "larql serve" "server did not start within 30s"

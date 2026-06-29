@@ -236,14 +236,26 @@ _run_goose_openrouter() {
     _run_goose_call "$GOOSE_BIN" run -t "$task"
 }
 
+_get_larql_model_id() {
+  # Query /v1/models and return the first model id reported by the server.
+  # B6: vindex basename (e.g. "smollm2-360m") differs from server model id
+  # (e.g. "smollm2-360m-src"). Using the basename causes a 404 from Goose.
+  local fallback="$1"
+  curl -sf "http://localhost:${LARQL_PORT}/v1/models" 2>/dev/null \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['data'][0]['id'])" 2>/dev/null \
+    || echo "$fallback"
+}
+
 _run_goose_larql() {
   local vindex="$1" task="$2"
-  echo "coding-agent: provider=larql (openai-compat) model=$vindex" >&2
+  local model_id
+  model_id=$(_get_larql_model_id "$vindex")
+  echo "coding-agent: provider=larql (openai-compat) model=$model_id" >&2
   # timeout must be INSIDE _run_goose_call (not wrapping it) so PIPESTATUS[0] is the goose exit
   GOOSE_PROVIDER=openai \
     OPENAI_BASE_URL="http://localhost:${LARQL_PORT}/v1" \
     OPENAI_API_KEY=larql \
-    GOOSE_MODEL="$vindex" \
+    GOOSE_MODEL="$model_id" \
     GOOSE_MODE=auto \
     _run_goose_call timeout "$LARQL_INFERENCE_TIMEOUT" "$GOOSE_BIN" run -t "$task"
 }

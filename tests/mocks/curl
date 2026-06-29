@@ -47,11 +47,13 @@ elif echo "$args" | grep -q "api/ps"; then
 # larql /v1/models health check
 elif echo "$args" | grep -q "v1/models" && ! echo "$args" | grep -q "openrouter"; then
   _log "v1/models"
+  # B6: seam to return a specific model id (defaults to "smollm2-360m" if unset)
+  _model_id="${MOCK_LARQL_MODEL_ID:-smollm2-360m}"
   # Port-specific override: succeed only for MOCK_LARQL_PORT_RUNNING port (B1 singleton test).
   # Any v1/models request to a different port fails.
   if [ -n "${MOCK_LARQL_PORT_RUNNING:-}" ]; then
     if echo "$args" | grep -q ":${MOCK_LARQL_PORT_RUNNING}/"; then
-      echo '{"data":[{"id":"smollm2-360m"}]}'
+      echo "{\"data\":[{\"id\":\"${_model_id}\"}]}"
       exit 0
     else
       exit 1
@@ -64,7 +66,7 @@ elif echo "$args" | grep -q "v1/models" && ! echo "$args" | grep -q "openrouter"
     count=$(( count + 1 ))
     echo "$count" > "$MOCK_LARQL_COUNTER_FILE"
     if [ "$count" -ge "$MOCK_LARQL_RUNNING_AFTER" ]; then
-      echo '{"data":[{"id":"smollm2-360m"}]}'
+      echo "{\"data\":[{\"id\":\"${_model_id}\"}]}"
       exit 0
     else
       exit 1
@@ -75,7 +77,7 @@ elif echo "$args" | grep -q "v1/models" && ! echo "$args" | grep -q "openrouter"
     exit 1
   fi
   if [ "${MOCK_CURL_LARQL_EXIT:-${MOCK_CURL_EXIT:-0}}" = "0" ]; then
-    echo '{"data":[{"id":"smollm2-360m"}]}'
+    echo "{\"data\":[{\"id\":\"${_model_id}\"}]}"
     exit 0
   else
     exit 1
