@@ -818,7 +818,29 @@ The oracle test harness — the A×B×C evaluation that asks coding-agent to wri
 
 Plan B's key tasks:
 1. A-dimension gate: verify fixture build succeeds and triple count is in expected range
-2. B-dimension gate: WALK precision@k against a golden entity set per repo
+2. B-dimension gate: INFER precision@k against a golden entity set per repo (NOT WALK — KNN inserts are invisible to WALK by design; see Architecture Mismatch note below)
 3. C-dimension oracle: coding-agent writes program Q (test/script/LQL session) predicting P's behavior; oracle runs both and scores
 
-Plan B cannot begin until both `.vlp` fixtures from Task 4 are committed and `test_vlp_roundtrip_walk_returns_inserted_entity` (Task 2 of this plan) passes.
+---
+
+### Architecture Mismatch (source-code-confirmed, not a plan bug)
+
+**COMPOSE mode write path (from source code analysis, not empirical test):**
+`INSERT INTO EDGES ... MODE COMPOSE` calls `install_compiled_slot`, which writes:
+- `gate_vec = unit_vec(residual_at_layer) * median_gate_norm * 30×` → stored in `PatchedVindex.overrides_gate`
+- `up_vec` and `down_vec` → stored in parallel overlay maps
+
+`PatchedVindex.walk()` calls `gate_knn()` which reads `overrides_gate`. So COMPOSE inserts **are architecturally visible to WALK** (the gate-knn path includes them).
+
+**However, COMPOSE is not suitable for this plan's 95-triple use case:**
+1. Hopfield-style cap: ~N=5–10 compose inserts per layer before cross-fact interference degrades retrieval. 95 triples exceed this by 10×.
+2. WALK query vector = token embedding (L0). COMPOSE gate vector = unit_vec(layer-24 residual) × 30. Similarity depends on how well the token embedding aligns with the forward-pass residual at layer 24 — not guaranteed high for arbitrary entity names.
+3. COMPOSE uses `PatchOp::Insert` (gate/up/down overlay). KNN uses `PatchOp::InsertKnn` (KnnStore entry). These are distinct op types in the `.vlp` format.
+
+**Architecture mismatch with coding-agent consumers:**
+`bin/coding-agent:252` uses `WALK "%s" TOP 10`. `scripts/github_lql_bridge.py` uses `entity_walk()`. Both are WALK-based. KNN inserts (from this plan) are invisible to WALK — they are only retrievable via INFER. This mismatch is **pre-existing and not caused by this plan**. Resolution options:
+- Switch consumer to INFER (changes bridge design, ~15s/query vs ~2s/query)
+- Use COMPOSE mode with COMPACT MAJOR to promote to vindex-baked gate vectors (requires empirical WALK verification; not done due to cold-start cost)
+- Accept that `.vlp` fixtures built here serve INFER-based consumers (Plan B oracle harness uses INFER directly — this is the correct consumer for KNN patches)
+
+Plan B cannot begin until both `.vlp` fixtures from Task 4 are committed and `test_vlp_roundtrip_infer_returns_inserted_entity` (Task 2 of this plan) passes.
