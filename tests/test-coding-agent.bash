@@ -9,6 +9,7 @@ PASS=0; FAIL=0
 
 export OPENROUTER_CHECK_URL="http://mock-openrouter.invalid"
 export LARQL_PORT="19191"   # high port; nothing runs there
+export LARQL_NO_DISCOVERY="1"  # disable cross-port discovery so real system servers don't interfere
 
 assert_contains() {
   local desc="$1" needle="$2" haystack="$3"
@@ -381,6 +382,44 @@ rc=$?
 assert_exit "exits 0 without graph context" "0" "$rc"
 assert_not_contains "no graph query mention in output" "querying graph context" "$out"
 assert_contains "goose still called normally" "GOOSE_PROVIDER=openrouter" "$(cat "$calllog")"
+rm -f "$calllog"
+
+echo ""
+echo "--- 22: larql server running on different port → reuse, don't start new (B1) ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_CURL_LARQL_EXIT=1 \
+  MOCK_LARQL_PORT_RUNNING=8282 \
+  LARQL_DISCOVER_PORT=8282 \
+  LARQL_NO_DISCOVERY=0 \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  LARQL_PORT=8080 \
+  bash "$AGENT" "write a hello function" 2>&1)
+rc=$?
+assert_exit "exits 0 reusing server on different port" "0" "$rc"
+assert_not_contains "larql serve NOT invoked (server already exists)" "larql serve" "$(cat "$calllog")"
+assert_contains "uses discovered port in OPENAI_BASE_URL" "OPENAI_BASE_URL=http://localhost:8282/v1" "$(cat "$calllog")"
+rm -f "$calllog"
+
+echo ""
+echo "--- 23: insufficient memory → refuse to start larql-server (B2) ---"
+calllog=$(mktemp)
+out=$(PATH="$MOCKS:$PATH" \
+  MOCK_CURL_OPENROUTER_EXIT=1 \
+  MOCK_CURL_LARQL_EXIT=1 \
+  MOCK_FREE_AVAIL_MB=512 \
+  FREE_BIN="$MOCKS/free" \
+  MOCK_CALL_LOG="$calllog" \
+  GOOSE_BIN="$MOCKS/goose" \
+  LARQL_BIN="$MOCKS/larql" \
+  bash "$AGENT" "write a hello function" 2>&1)
+rc=$?
+assert_exit "exits 1 on insufficient memory" "1" "$rc"
+assert_contains "emits memory error" "insufficient memory" "$out"
+assert_not_contains "larql serve NOT invoked when low memory" "larql serve" "$(cat "$calllog")"
 rm -f "$calllog"
 
 echo ""

@@ -7,6 +7,7 @@
 #   MOCK_OLLAMA_MODEL_NAME — model name for api/ps response (default: qwen2.5-coder:7b)
 #   MOCK_PS_LOADED_AFTER — api/ps returns loaded only after this many calls (uses counter file)
 #   MOCK_PS_COUNTER_FILE — counter state file for MOCK_PS_LOADED_AFTER
+#   MOCK_LARQL_PORT_RUNNING — port number of a "running" larql-server; v1/models succeeds only for this port
 
 args="$*"
 
@@ -46,6 +47,16 @@ elif echo "$args" | grep -q "api/ps"; then
 # larql /v1/models health check
 elif echo "$args" | grep -q "v1/models" && ! echo "$args" | grep -q "openrouter"; then
   _log "v1/models"
+  # Port-specific override: succeed only for MOCK_LARQL_PORT_RUNNING port (B1 singleton test).
+  # Any v1/models request to a different port fails.
+  if [ -n "${MOCK_LARQL_PORT_RUNNING:-}" ]; then
+    if echo "$args" | grep -q ":${MOCK_LARQL_PORT_RUNNING}/"; then
+      echo '{"data":[{"id":"smollm2-360m"}]}'
+      exit 0
+    else
+      exit 1
+    fi
+  fi
   # Stateful: become running after N health-check calls (mirrors MOCK_PS_LOADED_AFTER)
   if [ -n "${MOCK_LARQL_RUNNING_AFTER:-}" ] && [ -n "${MOCK_LARQL_COUNTER_FILE:-}" ]; then
     count=0

@@ -22,6 +22,14 @@ CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 CGROUP_NAME="${CGROUP_NAME:-babel-harness}"
 # set LARQL_NO_CGROUP=1 to skip cgroup enrollment (tests, CI, non-Linux)
 LARQL_NO_CGROUP="${LARQL_NO_CGROUP:-0}"
+# B1: seam for singleton discovery.
+# LARQL_DISCOVER_PORT: supply a known port directly (bypasses ss scan in tests).
+# LARQL_NO_DISCOVERY=1: skip cross-port discovery entirely (test seam — prevents finding real servers).
+LARQL_DISCOVER_PORT="${LARQL_DISCOVER_PORT:-}"
+LARQL_NO_DISCOVERY="${LARQL_NO_DISCOVERY:-0}"
+# B2: memory preflight — minimum available MB before starting larql-server; FREE_BIN for testing.
+LARQL_MIN_AVAIL_MB="${LARQL_MIN_AVAIL_MB:-2048}"
+FREE_BIN="${FREE_BIN:-free}"
 # GitHub remote vindex: set to "owner/repo" to inject graph retrieval context into the task.
 # TF-IDF lexical retrieval over the repo entity graph; result prepended to Goose task prompt.
 GITHUB_GRAPH_REPO="${GITHUB_GRAPH_REPO:-}"
@@ -45,8 +53,47 @@ Note: quote the TASK string to preserve spaces: coding-agent "write a hello func
 EOF
 }
 
+_discover_larql_port() {
+  # Scan for any running larql-server process and return its listening port.
+  # This is the production path; tests override via LARQL_DISCOVER_PORT seam.
+  ss -tlpn 2>/dev/null \
+    | awk '/larql-server/{
+        for(i=1;i<=NF;i++){
+          if($i~/^[0-9.]+:[0-9]+$/){split($i,a,":");print a[2];exit}
+        }
+      }' | head -1 || true
+}
+
 _check_larql() {
-  _check_http "http://localhost:${LARQL_PORT}/v1/models"
+  # Check configured port first (fast path).
+  _check_http "http://localhost:${LARQL_PORT}/v1/models" && return 0
+  # Singleton discovery: find any running larql-server on a different port and reuse it.
+  # LARQL_NO_DISCOVERY=1 disables this scan (test seam — avoids finding real system servers).
+  [ "${LARQL_NO_DISCOVERY:-0}" = "1" ] && return 1
+  local found_port="${LARQL_DISCOVER_PORT}"
+  if [ -z "$found_port" ]; then
+    found_port=$(_discover_larql_port)
+  fi
+  if [ -n "$found_port" ] && [ "$found_port" != "$LARQL_PORT" ]; then
+    if _check_http "http://localhost:${found_port}/v1/models"; then
+      echo "coding-agent: found larql-server on port $found_port (configured: $LARQL_PORT) — reusing" >&2
+      LARQL_PORT="$found_port"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+_preflight_memory_check() {
+  local avail_mb
+  avail_mb=$("$FREE_BIN" -m 2>/dev/null | awk '/^Mem/{print $7}')
+  if [ -z "$avail_mb" ] || [ "$avail_mb" -lt "$LARQL_MIN_AVAIL_MB" ]; then
+    echo "coding-agent: insufficient memory to start larql-server" \
+         "(available: ${avail_mb:-unknown}MB, required: ${LARQL_MIN_AVAIL_MB}MB)" \
+         "— kill an existing larql-server or free memory first" >&2
+    return 1
+  fi
+  return 0
 }
 
 _larql_find_server_pid() {
@@ -85,6 +132,7 @@ _larql_cleanup() {
 
 _start_larql_server() {
   local vindex="$1"
+  _preflight_memory_check || return 1
   echo "coding-agent: starting larql serve $vindex on port $LARQL_PORT..." >&2
   echo "coding-agent: larql-server log: $LARQL_LOG_FILE" >&2
   "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" >> "$LARQL_LOG_FILE" 2>&1 &
