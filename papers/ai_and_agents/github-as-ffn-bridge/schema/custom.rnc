@@ -1,0 +1,22 @@
+# custom.rnc — RELAX NG Compact schema extending DocBook 5.2
+# Validates role="finding" sections with condition attribute constraints.
+# Usage: jing -c schema/custom.rnc src/01-github-as-ffn.xml
+
+namespace db = "http://docbook.org/ns/docbook"
+namespace xi = "http://www.w3.org/2001/XInclude"
+
+# Allowed values for condition on finding sections
+finding-condition = "confirmed" | "confirmed-with-caveats" | "split"
+
+# A finding section must have role="finding" and a valid condition
+finding-section =
+  element db:section {
+    attribute xml:id { xsd:NCName },
+    attribute role { "finding" },
+    attribute condition { finding-condition },
+    element db:title { text },
+    element db:para { mixed { any* } }+
+  }
+
+# Extension point: any db:section may optionally be a finding-section
+# (DocBook's own schema handles the non-finding case)

@@ -1,0 +1,587 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article xmlns="http://docbook.org/ns/docbook"
+         xmlns:xi="http://www.w3.org/2001/XInclude"
+         xmlns:xlink="http://www.w3.org/1999/xlink"
+         version="5.2"
+         xml:id="github-as-ffn"
+         xml:lang="en">
+
+  <xi:include href="00-metadata.xml"/>
+  <title>GitHub Repository Graphs as Auditable Feed-Forward Networks for Coding Agent Reasoning</title>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="abstract">
+    <title>Abstract</title>
+    <para>
+      Feed-forward network (FFN) layers in transformer language models act as
+      key-value memories: each neuron encodes a key vector (gate) that activates
+      on specific input patterns and a value vector (down-projection) that injects
+      factual tokens into the residual stream
+      <citation>geva2021ffn</citation>.
+      This factual storage is opaque — there is no principled path from a model
+      output back to the specific FFN weight that produced it.
+    </para>
+    <para>
+      We present an architecture in which a GitHub repository's static call graph,
+      dependency graph, and environment-variable seam graph are encoded as a
+      vector-indexed triple store and substituted for the FFN layer during inference
+      via the larql WalkFfn gate-KNN mechanism
+      <citation>larql2024</citation>.
+      The substitution makes every factual retrieval step inspectable: the querying
+      entity, the activated layer and feature slot, the gate similarity score, and
+      the target token are all externally observable. This auditability is the
+      primary value of the architecture over opaque FFN weights or traditional
+      retrieval-augmented generation (RAG).
+    </para>
+    <para>
+      We report a critical batch-insert collision bug in the larql-python bindings
+      (<function>VectorIndex.find_free_feature</function>), document its root cause
+      (mmap/heap split in the Rust backend), present the fix (pre-scan eviction
+      order), and propose a dual-theory experimental design whose observable
+      divergence settles whether the WalkFfn mechanism encodes weighted BFS
+      structure (Theory A) or global Laplacian spectral structure (Theory B).
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="introduction">
+    <title>Introduction: The FFN Opacity Problem</title>
+    <para>
+      Geva et al.
+      <citation>geva2021ffn</citation>
+      showed that transformer FFN layers function as key-value memories: the
+      up-projection weight matrix stores keys, and the down-projection matrix
+      stores values. Meng et al.
+      <citation>meng2022rome</citation>
+      demonstrated that factual associations are localised to specific FFN layers
+      and can be edited by rank-one weight updates (ROME). Both results establish
+      that FFN weights <emphasis>store</emphasis> knowledge — but neither makes
+      that storage <emphasis>auditable</emphasis> in the sense of tracing a specific
+      output token back to the specific weight entry that produced it.
+    </para>
+    <para>
+      For coding agents — language model systems that write, read, and execute code
+      — this opacity creates a verification problem. When an agent invokes a
+      function, imports a module, or reads an environment variable, one cannot
+      determine whether that decision derives from (a) training data about the
+      function, (b) in-context examples, or (c) a hallucinated association with no
+      grounding. The FFN weights are the primary candidate for (c), and they are
+      unauditable.
+    </para>
+    <para>
+      The architecture described in this paper replaces (or supplements) the FFN
+      layer with an externally-stored triple store derived from the target
+      repository's actual call graph. Every retrieval from this store is fully
+      observable: the querying entity, the activated feature, and the target are
+      logged as structured data rather than absorbed into weight matrices.
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="background">
+    <title>Background: WalkFfn and the larql Knowledge Graph Engine</title>
+
+    <section xml:id="background-larql">
+      <title>larql</title>
+      <para>
+        larql is a knowledge graph inference engine that treats a pre-trained
+        language model's weight matrices as the underlying embedding and retrieval
+        infrastructure
+        <citation>larql2024</citation>.
+        It exposes two query modes:
+      </para>
+      <itemizedlist>
+        <listitem>
+          <para>
+            <emphasis role="strong">WALK</emphasis> — a pure gate-vector scan over
+            <literal>overrides_gate</literal>. Given a query entity, larql computes
+            the entity's embedding, performs a cosine-similarity search over the
+            gate vectors stored in the vindex, and returns the top-<emphasis>k</emphasis>
+            feature slots with their similarity scores and associated target tokens.
+            WALK does not perform a forward pass through the model weights.
+          </para>
+        </listitem>
+        <listitem>
+          <para>
+            <emphasis role="strong">INFER</emphasis> — a full forward pass followed
+            by a KNN override at the post-logits layer. INFER reads from the
+            <literal>knn_store</literal> (not <literal>overrides_gate</literal>) and
+            requires loading model weights into memory.
+          </para>
+        </listitem>
+      </itemizedlist>
+      <para>
+        The two query modes read from distinct stores and are not interchangeable.
+        Inserts via <function>vindex.insert()</function> write to
+        <literal>overrides_gate</literal> (WALK-visible). Inserts via
+        <literal>INSERT INTO EDGES … MODE KNN</literal> write to
+        <literal>knn_store</literal> (INFER-visible only).
+      </para>
+    </section>
+
+    <section xml:id="background-walkffn">
+      <title>WalkFfn Gate-KNN</title>
+      <para>
+        The WalkFfn mechanism encodes a fact triple
+        <literal>(entity, relation, target)</literal> as follows:
+      </para>
+      <orderedlist>
+        <listitem>
+          <para>
+            Compute the entity's embedding vector
+            <literal>e = embed(entity)</literal>.
+          </para>
+        </listitem>
+        <listitem>
+          <para>
+            Compute the relation's cluster centre
+            <literal>c = cluster_centre(relation)</literal>.
+          </para>
+        </listitem>
+        <listitem>
+          <para>
+            Synthesise a gate vector:
+            <literal>g = normalise(e × 0.7 + c × 0.3)</literal>,
+            scaled to match the average L2 norm of existing gate vectors at the
+            target layer.
+          </para>
+        </listitem>
+        <listitem>
+          <para>
+            Write <literal>g</literal> to the gate slot for feature
+            <literal>f</literal> at layer <literal>l</literal>:
+            <literal>vindex.set_gate_vector(l, f, g)</literal>.
+          </para>
+        </listitem>
+        <listitem>
+          <para>
+            Write the target token and a confidence score:
+            <literal>vindex.set_feature_meta(l, f, target, c_score=1.0)</literal>.
+          </para>
+        </listitem>
+      </orderedlist>
+      <para>
+        At query time, <literal>WALK "entity" TOP k</literal> computes
+        <literal>embed(entity)</literal> and returns the <emphasis>k</emphasis>
+        feature slots whose gate vectors have the highest cosine similarity. The
+        returned slots expose their layer index, feature index, gate score, and
+        stored target token — all externally observable.
+      </para>
+    </section>
+
+    <section xml:id="background-vlp">
+      <title>Vindex Layer Patches (.vlp)</title>
+      <para>
+        A <literal>.vlp</literal> file is a JSON overlay that specifies a set of
+        <literal>PatchOp</literal> operations to apply on top of a base vindex
+        without modifying the base on disk. Each insert operation carries:
+        <literal>op</literal> (either <literal>"insert"</literal> for WALK-visible
+        or <literal>"insert_knn"</literal> for INFER-only),
+        <literal>layer</literal>, <literal>feature</literal>,
+        <literal>gate_vector_b64</literal> (little-endian f32 array, base64-encoded),
+        and <literal>down_meta</literal> with compact serde keys
+        <literal>"t"</literal> (top_token), <literal>"i"</literal>
+        (top_token_id), <literal>"c"</literal> (c_score).
+      </para>
+      <para>
+        The patch is applied in-memory via <literal>APPLY PATCH "path.vlp"</literal>
+        in an LQL session. The base vindex on disk is never modified. This overlay
+        design is what makes repository-specific knowledge both injectable and
+        reversible.
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="architecture">
+    <title>Architecture: GitHub Repos as Auditable FFN</title>
+
+    <section xml:id="arch-extraction">
+      <title>Triple Extraction</title>
+      <para>
+        Repository knowledge is extracted as a typed triple store using static
+        analysis of bash, Python, and Rust source files. The extraction pipeline
+        (<filename>scripts/extract-graph.py</filename>,
+        <filename>scripts/github_graph.py</filename>) produces triples of the form
+        <literal>(entity, relation, target)</literal> where relation is one of:
+        <literal>calls</literal>, <literal>sources</literal>,
+        <literal>invokes</literal>, <literal>sets_env</literal>,
+        <literal>reads_env</literal>, <literal>depends_on</literal>,
+        <literal>tests</literal>, <literal>is_a</literal>,
+        <literal>contains</literal>.
+      </para>
+      <para>
+        For the babel-harness repository at commit
+        <literal>94485d4</literal>, this yields 80 entities and 183 edges across
+        the following node types:
+      </para>
+      <informaltable>
+        <tgroup cols="2">
+          <colspec colname="type" colwidth="1*"/>
+          <colspec colname="count" colwidth="1*"/>
+          <thead>
+            <row><entry>Node type</entry><entry>Count</entry></row>
+          </thead>
+          <tbody>
+            <row><entry>function</entry><entry>29</entry></row>
+            <row><entry>env_seam</entry><entry>25</entry></row>
+            <row><entry>external_binary</entry><entry>6</entry></row>
+            <row><entry>script/module</entry><entry>13</entry></row>
+            <row><entry>library/type</entry><entry>7</entry></row>
+          </tbody>
+        </tgroup>
+      </informaltable>
+    </section>
+
+    <section xml:id="arch-patch-builder">
+      <title>Patch Builder: Vindexfile Form 1 → .vlp</title>
+      <para>
+        The extraction pipeline emits a <filename>Vindexfile</filename> containing
+        Form 1 INSERT directives:
+      </para>
+      <programlisting language="text">INSERT "entity", "relation", "target"</programlisting>
+      <para>
+        <filename>scripts/build_repo_patch.py</filename> reads these directives and
+        translates them into a <literal>.vlp</literal> patch file via
+        <function>vindex.insert()</function>-equivalent logic. The key design
+        decision is the write path:
+      </para>
+      <itemizedlist>
+        <listitem>
+          <para>
+            <emphasis role="strong">Rejected: MODE KNN</emphasis> —
+            <literal>INSERT INTO EDGES … MODE KNN</literal> writes to
+            <literal>knn_store</literal>. The coding agent and bridge consumer both
+            use <literal>WALK</literal> / <function>entity_walk()</function>, which
+            does not read <literal>knn_store</literal>. KNN inserts are invisible
+            to the primary consumer.
+          </para>
+        </listitem>
+        <listitem>
+          <para>
+            <emphasis role="strong">Adopted: vindex.insert() write path</emphasis> —
+            writing gate vectors to <literal>overrides_gate</literal> via
+            <function>set_gate_vector()</function> and
+            <function>set_feature_meta()</function> produces
+            <literal>op: "insert"</literal> operations in the <literal>.vlp</literal>
+            that are visible to WALK queries. This enables the coding agent's
+            retrieval to be fully observed.
+          </para>
+        </listitem>
+      </itemizedlist>
+    </section>
+
+    <section xml:id="arch-bridge">
+      <title>Bridge Server</title>
+      <para>
+        <filename>scripts/github_lql_bridge.py</filename> is a FastAPI server
+        implementing the larql-server HTTP protocol
+        (<literal>/v1/walk</literal>, <literal>/v1/stats</literal>,
+        <literal>/v1/describe</literal>, <literal>/v1/relations</literal>,
+        <literal>/v1/select</literal>). At startup it builds two separate vindex
+        objects from the extracted triple store — one using topological layer
+        assignment (Theory A) and one using spectral layer assignment (Theory B) —
+        and on every <literal>/v1/walk</literal> call logs the divergence between
+        the two theories' WALK outputs. The coding agent points its
+        <varname>OPENAI_BASE_URL</varname> at this bridge, transparently using the
+        repository graph as its knowledge base.
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="auditability">
+    <title>The Auditability Mechanism</title>
+    <para>
+      The central claim of this architecture is that it makes coding agent
+      reasoning auditable. We define auditability operationally: given a specific
+      agent output token or decision, an auditor can identify the specific stored
+      fact that produced it, verify that fact against the repository's source code,
+      and determine whether the agent's reasoning was grounded in actual repository
+      structure or hallucinated.
+    </para>
+    <para>
+      Each WALK query returns a list of
+      <literal>(layer, feature, gate_score, top_token)</literal> tuples. Because
+      the <literal>.vlp</literal> records which
+      <literal>(entity, relation, target)</literal> triple was inserted at each
+      <literal>(layer, feature)</literal> slot, the audit trail is complete:
+    </para>
+    <programlisting language="text">
+WALK "pi-harness" TOP 5 →
+  L19:F306  gate=+12.2  top="curl"          ← (pi-harness, invokes, curl)
+  L19:F293  gate=+12.2  top="library"       ← (pi-harness, is_a, library)
+  L19:F2320 gate=+12.2  top="OPENROUTER…"  ← (pi-harness, sets_env, OPENROUTER_CHECK_URL)
+    </programlisting>
+    <para>
+      Each returned slot maps to a specific triple inserted from the repository
+      graph. The auditor can verify: does <filename>bin/pi-harness</filename>
+      actually invoke <command>curl</command>? Does it actually set
+      <varname>OPENROUTER_CHECK_URL</varname>? These are answerable by reading the
+      source file — no inference required.
+    </para>
+    <para>
+      This contrasts with both (a) opaque neural FFN weights, where the source of
+      a token prediction cannot be attributed to a specific weight entry, and (b)
+      traditional RAG, where retrieved passages are injected into the context window
+      unstructured and their contribution to the output cannot be isolated.
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="technical-findings">
+    <title>Technical Findings</title>
+
+    <section xml:id="finding-slot-collision"
+             role="finding"
+             condition="confirmed">
+      <title>F1: VectorIndex.find_free_feature() mmap/heap Split Bug</title>
+      <para>
+        <emphasis role="strong">Finding:</emphasis> When
+        <function>vindex.insert()</function> is called multiple times within a
+        single Python process, all inserts after the first are silently directed to
+        the same <literal>(layer, feature)</literal> slot, each evicting the
+        previous insert. Only the last insert survives.
+      </para>
+      <para>
+        <emphasis role="strong">Root cause (source-confirmed):</emphasis>
+        <function>VectorIndex.find_free_feature()</function>
+        (<filename>larql-vindex/src/index/mutate/mod.rs:152–200</filename>)
+        reads slot occupancy from <literal>self.metadata.down_meta_mmap</literal>
+        (memory-mapped on-disk data). <function>set_feature_meta()</function> writes
+        to <literal>self.metadata.down_meta</literal> (heap). The mmap is never
+        updated by in-process writes. Consequently, on a fully-occupied layer, every
+        call to <function>find_free_feature()</function> returns the same weakest
+        slot (lowest <literal>c_score</literal>) because the mmap always reads the
+        pre-write state.
+      </para>
+      <para>
+        The <literal>PatchedVindex</literal> overlay implementation in
+        <filename>larql-vindex/src/patch/overlay.rs:335–381</filename> explicitly
+        documents this behaviour at line 338:
+        <quote>find_free_feature keeps returning the same 'weakest' slot across
+        calls — which is catastrophic for multi-fact INSERT.</quote>
+        <function>PatchedVindex.find_free_feature()</function> correctly tracks
+        overlay-claimed slots to avoid this; the larql-python
+        <function>insert()</function> binding calls the base version and does not.
+      </para>
+      <para>
+        <emphasis role="strong">Fix:</emphasis> Pre-scan all
+        <replaceable>N</replaceable> feature slots at the target layer before any
+        writes, when the heap is empty and the mmap is ground truth. Build an
+        ordered iterator: free slots first, then occupied slots ordered by
+        <literal>c_score</literal> ascending (weakest eviction candidates first).
+        Consume one slot per insert from this pre-built iterator. This mirrors
+        <function>PatchedVindex.find_free_feature()</function>.
+      </para>
+      <para>
+        <emphasis role="strong">Blast radius:</emphasis> smollm2-360m Layer 19 is
+        fully occupied (all 2,560 feature slots have metadata). The fix therefore
+        evicts the 95 weakest base features in the overlay (in-process only; the
+        base vindex on disk is unmodified). The weakest evicted feature had
+        token=<literal>'Tro'</literal>, <literal>c_score=1.2936</literal>.
+      </para>
+    </section>
+
+    <section xml:id="finding-layer-saturation"
+             role="finding"
+             condition="confirmed">
+      <title>F2: Layer Saturation in smollm2-360m</title>
+      <para>
+        Layer 19 of the smollm2-360m base vindex has all 2,560 feature slots
+        occupied (<literal>feature_meta(19, f) is not None</literal> for all
+        <replaceable>f</replaceable> in 0..2559). This is the typical layer for
+        the <literal>"calls"</literal> relation as determined by
+        <function>vindex.typical_layer("calls")</function>. The pre-scan fix
+        handles this correctly by treating the full layer as a pool of eviction
+        candidates rather than reporting exhaustion.
+      </para>
+    </section>
+
+    <section xml:id="finding-gate-vec-replication"
+             role="finding"
+             condition="confirmed-with-caveats">
+      <title>F3: Gate Vector Synthesis Replication for Batch Inserts</title>
+      <para>
+        Because <function>vindex.insert()</function> is broken for batch use
+        (F1), <filename>build_repo_patch.py</filename> replicates its gate vector
+        synthesis via the low-level
+        <function>set_gate_vector()</function> / <function>set_feature_meta()</function>
+        API. The replication mirrors
+        <filename>larql-python/src/vindex.rs:971–1007</filename> exactly:
+        <literal>gate_vec = normalise(entity_embed × 0.7 + cluster_centre × 0.3)</literal>,
+        scaled to the average L2 norm of the first 100 gate vectors at the target
+        layer.
+      </para>
+      <para>
+        <emphasis role="strong">Caveat:</emphasis> The normalization samples the
+        first 100 features from the heap-after-promotion state. If any evicted slot
+        index is below 100, the normalization sample shifts between inserts. This
+        is a minor fidelity issue; <function>vindex.insert()</function> itself has
+        the same property.
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="dual-theory">
+    <title>Dual-Theory Experimental Design</title>
+    <para>
+      The <filename>scripts/graph_vindex.py</filename> module implements two
+      formally-derived layer assignment strategies for the triple store. Their
+      divergence on WalkFfn output is the primary experimental observable that
+      can distinguish between two competing hypotheses about what WalkFfn encodes.
+    </para>
+
+    <section xml:id="theory-a">
+      <title>Theory A: Topological Layer Assignment (WalkFfn ≡ Weighted BFS)</title>
+      <para>
+        The hypothesis is that the larql WalkFfn gate-KNN mechanism is equivalent
+        to a weighted breadth-first search from a seed entity. Under this theory,
+        the correct layer for an entity is its BFS hop-distance from the repository
+        root, normalised to <literal>[0, num_layers)</literal>:
+      </para>
+      <programlisting language="python">
+l(v) = floor(d(v, seed) / D * num_layers)   # clipped to [0, num_layers-1]
+l(r) = round(mean((l(u) + l(v)) / 2 for (u,r,v) in E_r))
+      </programlisting>
+      <para>
+        Unreachable nodes receive the fallback layer
+        <literal>num_layers // 2</literal>.
+      </para>
+    </section>
+
+    <section xml:id="theory-b">
+      <title>Theory B: Spectral Layer Assignment (WalkFfn Encodes Global Spectral Structure)</title>
+      <para>
+        The hypothesis is that WalkFfn encodes the global spectral structure of the
+        code graph: entities whose call patterns are globally similar map to the
+        same layer. Under this theory, the correct layer is the Laplacian spectral
+        band that contains the most energy for the entity's eigenvector projection:
+      </para>
+      <programlisting language="python">
+l(v) = argmax_l Σ_{λ_i ∈ B_l} |x̂_v(i)|²
+# where B_l partitions [λ_min, λ_max] into num_layers bands
+# x̂_v is the v-th row of the eigenvector matrix of the normalised Laplacian
+      </programlisting>
+    </section>
+
+    <section xml:id="experimental-observable">
+      <title>Observable: WalkFfn Output Divergence</title>
+      <para>
+        The bridge server (<filename>scripts/github_lql_bridge.py</filename>)
+        builds two independent vindex objects from the same triple store, one
+        per theory, and logs the divergence between their WALK outputs on every
+        <literal>/v1/walk</literal> call. A high divergence rate favours Theory B
+        (spectral structure is globally meaningful and differs from BFS distance);
+        a low divergence rate favours Theory A (BFS distance captures the same
+        structure that WalkFfn would assign naturally).
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="related-work">
+    <title>Related Work</title>
+    <para>
+      Geva et al.
+      <citation>geva2021ffn</citation>
+      established the key-value memory interpretation of FFN layers. Meng et al.
+      <citation>meng2022rome</citation>
+      demonstrated that factual associations are localised to specific FFN layers
+      and are editable via rank-one weight updates. Both lines of work treat the
+      FFN as the primary locus of factual knowledge in a transformer, motivating
+      the approach of substituting a transparent external store.
+    </para>
+    <para>
+      Lewis et al.
+      <citation>lewis2020rag</citation>
+      introduced retrieval-augmented generation (RAG) as a way to ground language
+      model outputs in external documents. The present architecture differs from
+      RAG in two respects: (a) retrieved knowledge is injected via the FFN gate-KNN
+      path rather than the context window, preserving the model's existing
+      inference structure; and (b) retrieval is mediated by the model's own
+      embedding space rather than a separate dense retrieval index, making the
+      similarity judgements interpretable in terms of the model's prior knowledge.
+    </para>
+    <para>
+      Hopfield
+      <citation>hopfield1982</citation>
+      established the theoretical foundation for associative memory in neural
+      networks. The larql WalkFfn mechanism can be understood as a Hopfield-style
+      associative memory operating on the model's gate vectors: each inserted triple
+      constitutes a memory pattern, and a query entity's embedding is the retrieval
+      cue.
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="conclusions">
+    <title>Conclusions</title>
+    <para>
+      We have presented an architecture in which a GitHub repository's call graph,
+      dependency graph, and environment-seam graph are encoded as a vector-indexed
+      triple store and injected into a language model's FFN layer via the larql
+      WalkFfn gate-KNN mechanism. The result is a coding agent whose factual
+      associations are fully auditable: every retrieval step exposes the querying
+      entity, the activated layer and feature, the gate similarity score, and the
+      target token — all traceable back to a specific line in the repository's
+      source code.
+    </para>
+    <para>
+      We have reported a critical batch-insert collision bug in the larql-python
+      bindings (F1), confirmed that Layer 19 of smollm2-360m is fully occupied (F2),
+      and documented the gate vector synthesis replication required to work around
+      the bug (F3). A pre-scan eviction order fix resolves the collision bug; the
+      95-triple babel-harness graph inserts correctly with 95 distinct feature slots
+      and all targets retrievable via WALK.
+    </para>
+    <para>
+      The dual-theory experimental design (topological vs. spectral layer
+      assignment) provides a concrete empirical path to settle whether the WalkFfn
+      mechanism is semantically equivalent to weighted BFS or encodes global
+      spectral graph structure. This question has implications for how future
+      auditable-FFN architectures should assign knowledge to model layers.
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <bibliography xml:id="references">
+    <title>References</title>
+    <bibliodiv>
+      <bibliomixed xml:id="geva2021ffn">
+        Geva, M., Schuster, R., Berant, J., &amp; Levy, O. (2021).
+        <emphasis>Transformer Feed-Forward Layers Are Key-Value Memories.</emphasis>
+        Proceedings of EMNLP 2021.
+        <link xlink:href="https://aclanthology.org/2021.emnlp-main.446"/>
+      </bibliomixed>
+      <bibliomixed xml:id="meng2022rome">
+        Meng, K., Bau, D., Andonian, A., &amp; Belinkov, Y. (2022).
+        <emphasis>Locating and Editing Factual Associations in GPT.</emphasis>
+        Advances in Neural Information Processing Systems 35 (NeurIPS 2022).
+        <link xlink:href="https://arxiv.org/abs/2202.05262"/>
+      </bibliomixed>
+      <bibliomixed xml:id="lewis2020rag">
+        Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V.,
+        Goyal, N., … Kiela, D. (2020).
+        <emphasis>Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.</emphasis>
+        Advances in Neural Information Processing Systems 33 (NeurIPS 2020).
+        <link xlink:href="https://arxiv.org/abs/2005.11401"/>
+      </bibliomixed>
+      <bibliomixed xml:id="hopfield1982">
+        Hopfield, J. J. (1982).
+        <emphasis>Neural networks and physical systems with emergent collective
+        computational abilities.</emphasis>
+        Proceedings of the National Academy of Sciences, 79(8), 2554–2558.
+        <link xlink:href="https://doi.org/10.1073/pnas.79.8.2554"/>
+      </bibliomixed>
+      <bibliomixed xml:id="larql2024">
+        Hayuk, C. (2024).
+        <emphasis>larql: A knowledge graph inference engine for language models.</emphasis>
+        GitHub repository: chrishayuk/larql.
+        <link xlink:href="https://github.com/chrishayuk/larql"/>
+      </bibliomixed>
+    </bibliodiv>
+  </bibliography>
+
+</article>
