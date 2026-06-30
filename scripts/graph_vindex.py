@@ -69,13 +69,16 @@ def compute_spectral_assignment(
         return {}
 
     n = len(nodes)
+    # Degenerate: single-node graph has no non-trivial eigenvalues.
+    # n<=1 would make k = min(..., n-1) = 0, then eigsh(k=1, N=1) triggers k>=N RuntimeWarning.
+    if n <= 1:
+        rel_fallback = {r: 0 for _, r, _, _ in triples}
+        return {**{v: 0 for v in nodes}, **rel_fallback}
+
     L_sparse = nx.normalized_laplacian_matrix(G.to_undirected(), nodelist=nodes)
     # Request num_layers+1 smallest eigenvectors (includes trivial zero).
-    # Clamp to n-1 since eigsh requires k < n.
+    # Clamp to n-1 since eigsh requires k < n. n >= 2 guaranteed by early exit above.
     k = min(num_layers + 1, n - 1)
-    if k < 1:
-        # Degenerate: single node — skip to early return below
-        k = 1
     try:
         eigenvalues, eigenvectors = _sparse_eigsh(L_sparse, k=k, which="SM", tol=1e-3)
     except Exception:

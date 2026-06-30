@@ -56,6 +56,19 @@ def test_spectral_single_node():
     assert "self" in m and 0 <= m["self"] <= 3
 
 
+def test_spectral_single_node_no_scipy_warning(recwarn):
+    """Single-node graph must not trigger scipy's k>=N RuntimeWarning.
+
+    Root cause: n=1 → k=min(num_layers+1,n-1)=0 → clamped to k=1 → eigsh(k=1,N=1) → k>=N warning.
+    Fix: early return before eigsh when n<=1 (no non-trivial eigenvalues can exist).
+    """
+    compute_spectral_assignment([("A", "self", "A", 1.0)], num_layers=4)
+    runtime_warnings = [w for w in recwarn.list if issubclass(w.category, RuntimeWarning)]
+    assert not runtime_warnings, (
+        f"unexpected RuntimeWarning(s): {[str(w.message) for w in runtime_warnings]}"
+    )
+
+
 def test_assignments_cover_same_keys():
     """Both modes must cover the same entities — divergence is in layer values, not keys."""
     t = compute_topological_assignment(TRIPLES, num_layers=8, seed="A")
