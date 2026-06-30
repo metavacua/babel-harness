@@ -373,39 +373,91 @@ scholarly-review → research  (if skill gaps found, trigger new loop)
     <section xml:id="finding-larql-delegation"
              role="finding"
              condition="confirmed">
-      <title>F2: larql Coding Subagent — Zero Invocations Despite Explicit Mandate</title>
+      <title>F2: larql Coding Subagent — Zero Invocations Despite Explicit Mandate; Root Cause Empirically Undetermined</title>
       <para>
         <emphasis role="strong">Finding:</emphasis> The skill's Phase 3 Development section
         states: <quote>Delegate to the larql coding subagent wherever possible.</quote>
-        The original skill specification (quoted in user prompts) states: <quote>Claude CLI
-        should delegate as much work to the larql-based coding subagent and contribute to
-        the cycle of research, development, testing, and actual demonstrations of the
-        capabilities and limitations of the babel coding harness.</quote>
+        The original skill specification states: <quote>Claude CLI should delegate as much
+        work to the larql-based coding subagent and contribute to the cycle of research,
+        development, testing, and actual demonstrations of the capabilities and limitations
+        of the babel coding harness.</quote>
         <literal>bin/coding-agent</literal> was invoked zero times during this session.
       </para>
       <para>
-        <emphasis role="strong">Root cause:</emphasis> The Phase 3 Development section
-        references the delegation requirement but the skill was used for meta-work (skill
-        improvement) rather than direct coding work. The session never entered Phase 3
-        Development; the <literal>skill-creator</literal> sub-skill performed its own
-        file edits directly. There is no mechanism in the skill that enforces delegation
-        to <literal>bin/coding-agent</literal> from within <literal>skill-creator</literal>
-        sub-skill calls.
+        <emphasis role="strong">Root cause: empirically undetermined.</emphasis>
+        This paper originally asserted a root cause (file-path scope ambiguity, missing
+        enforcement mechanism) without having applied systematic debugging to the delegation
+        failure. That assertion was incorrect methodology — a hypothesis stated as a
+        conclusion. The actual root cause requires empirical investigation to distinguish
+        between at least four candidate explanations, which are not equivalent and have
+        different fixes:
+      </para>
+      <itemizedlist>
+        <listitem>
+          <para><emphasis role="strong">Orchestration failure (most likely given F1):</emphasis>
+          Phase 3 was never entered because the loop was abandoned after Phase 0. If true,
+          no delegation opportunity ever arose — the failure is downstream of F1, not
+          independent. Systematic debugging would confirm by tracing the session transcript
+          to Phase 3's absence.</para>
+        </listitem>
+        <listitem>
+          <para><emphasis role="strong">Attention failure:</emphasis> The LLM attended to
+          the text of other phases but never attended to the delegation mandate. Text-based
+          mandates produce no observable signal when ignored, making this cause invisible
+          without transcript analysis.</para>
+        </listitem>
+        <listitem>
+          <para><emphasis role="strong">Cognitive suppression:</emphasis> The LLM made a
+          judgment call that the delegation mandate did not apply — analogous to the scope
+          guard misclassification in F3. If true, the framing or emphasis of the mandate
+          text is insufficient, not the scope definition.</para>
+        </listitem>
+        <listitem>
+          <para><emphasis role="strong">Interface or capability failure:</emphasis>
+          The LLM attempted delegation but encountered an obstacle. This would leave
+          observable evidence in the session transcript; absence of such evidence makes
+          this the least likely candidate.</para>
+        </listitem>
+      </itemizedlist>
+      <para>
+        A previous version of this paper proposed "fix" delegation failures by scoping the
+        mandate to file paths (<filename>bin/</filename>, <filename>scripts/</filename>,
+        <filename>lib/</filename>) and exempting "meta-files." This proposal was incorrect
+        on two grounds. First, it presupposes the root cause is scope ambiguity, which is
+        unestablished. Second, a file-path heuristic is a semantic classification decision —
+        precisely the kind of undecidable judgment that the DDT (deterministic/decidable/
+        tractable) framework is designed to eliminate. Deciding "is this a coding artifact
+        or a meta-file?" requires the same reasoning that Rice's theorem shows cannot be
+        mechanically bounded in general. The correct framing: <literal>bin/coding-agent</literal>
+        has an interface contract; the tractable question is "can I express this task as a
+        well-formed input to that interface?" — not "what category is this file?"
       </para>
       <para>
         <emphasis role="strong">Impact:</emphasis> The coding harness's capabilities and
-        limitations cannot be demonstrated if it is never invoked. This defeats a core
-        purpose of the babel-harness project: building evidence about what the
-        larql-augmented coding agent can and cannot do.
+        limitations cannot be demonstrated if it is never invoked. This defeats a stated
+        purpose of the babel-harness project. Additionally, the corrective mechanisms
+        specified by the skill — systematic-debugging back-edges from Phase 3 and Phase 4
+        anomalies — are unreachable if those phases are never entered. A skill that
+        specifies corrective mechanisms only for anomalies within phases it never reaches
+        provides no correction at all. This is a structural gap: there is no corrective
+        back-edge from "phase was never entered."
       </para>
       <para>
-        <emphasis role="strong">Proposed fix:</emphasis> Any Phase 3 work that modifies
-        files in <filename>bin/</filename>, <filename>scripts/</filename>, or
-        <filename>lib/</filename> should route through <literal>bin/coding-agent</literal>.
-        Meta-work (skill file edits, paper writing) is exempt from delegation because
-        <literal>bin/coding-agent</literal> is a coding agent, not a general-purpose agent.
-        The skill text should make this distinction explicit rather than stating the
-        requirement without scope.
+        <emphasis role="strong">Required investigation:</emphasis> Apply
+        <literal>superpowers:systematic-debugging</literal> to the delegation failure: read
+        the full session transcript, establish whether Phase 3 was entered, identify the
+        last phase transition recorded, and determine which of the four candidate causes
+        is operative. Verification before any fix is proposed: the fix must address the
+        confirmed cause, not the most convenient hypothesis.
+      </para>
+      <para>
+        <emphasis role="strong">Structural remediation (independent of root cause):</emphasis>
+        Mechanical tool enforcement makes delegation failures observable regardless of
+        cause. A required tool call either appears in the trace or it does not; a
+        text-based mandate produces no trace when ignored. The skill's delegation mandate
+        should be encoded as an enforced interface contract, not advisory text, so that
+        any future failure produces auditable evidence that systematic debugging can
+        consume.
       </para>
     </section>
 
@@ -677,12 +729,13 @@ scholarly-review → research  (if skill gaps found, trigger new loop)
       </listitem>
       <listitem>
         <para>
-          <emphasis role="strong">larql delegation scope clarification.</emphasis>
-          Revise Phase 3 to specify that <literal>bin/coding-agent</literal> delegation
-          applies to changes in <filename>bin/</filename>, <filename>scripts/</filename>,
-          and <filename>lib/</filename> (coding artifacts) and is exempt for skill files,
-          paper sources, and configuration — which are metavacua-namespace files that
-          the coding agent is not designed to handle.
+          <emphasis role="strong">Empirical root cause investigation for F2.</emphasis>
+          Apply <literal>superpowers:systematic-debugging</literal> to the delegation
+          failure before proposing any fix. Read the session transcript, confirm whether
+          Phase 3 was entered, identify the operative failure mode (orchestration,
+          attention, suppression, or interface), and verify the finding before acting.
+          A text-based mandate is not a mechanical enforcement; the goal is tool-enforced
+          delegation that produces an auditable trace so future failures are diagnosable.
         </para>
       </listitem>
     </orderedlist>
