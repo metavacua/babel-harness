@@ -1,0 +1,12 @@
+namespace db = "http://docbook.org/ns/docbook"
+
+finding-condition = "confirmed" | "confirmed-with-caveats" | "split"
+
+finding-section =
+  element db:section {
+    attribute xml:id { xsd:NCName },
+    attribute role { "finding" },
+    attribute condition { finding-condition },
+    element db:title { text },
+    element db:para { mixed { any* } }+
+  }

@@ -5,8 +5,15 @@ set -euo pipefail
 if [ -n "${MOCK_CALL_LOG:-}" ]; then
   echo "larql $*" >> "$MOCK_CALL_LOG"
 fi
-# For "serve": return immediately (simulate background serve start)
+# For "serve": return immediately, OR stay alive for PID-cleanup tests.
+# Set MOCK_LARQL_SERVE_STAY_ALIVE=1 and MOCK_LARQL_SERVE_PID_FILE to test cleanup.
 if [ "${1:-}" = "serve" ]; then
-  exit 0
+  if [ -n "${MOCK_LARQL_SERVE_PID_FILE:-}" ]; then
+    # Simulate larql behavior: fork a long-running child (like larql-server), then exit.
+    # Write child PID so the test can verify it was killed.
+    sleep 9999 &
+    echo $! > "$MOCK_LARQL_SERVE_PID_FILE"
+  fi
+  exit "${MOCK_LARQL_SERVE_EXIT:-0}"  # default 0 (normal); set to 1 to simulate launch failure
 fi
 exit "${MOCK_LARQL_EXIT:-0}"

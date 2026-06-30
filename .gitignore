@@ -1,0 +1,17 @@
+# Built vindex artifacts (large binary files, regenerate with: larql build)
+build/
+*.vindex
+
+# Temporary files
+*.tmp
+*.log
+
+# Local Claude Code settings (machine-specific, contains hook paths)
+.claude/settings.local.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Pi-harness workspace
+.pi-lens/

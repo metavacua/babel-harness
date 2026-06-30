@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<info xmlns="http://docbook.org/ns/docbook"
+      xmlns:dc="http://purl.org/dc/terms/"
+      xmlns:schema="https://schema.org/">
+
+  <dc:title>GitHub Repository Graphs as Auditable Feed-Forward Networks for Coding Agent Reasoning</dc:title>
+  <dc:creator>metavacua (Claude Sonnet 4.6, 2026-06-29)</dc:creator>
+  <dc:subject>language models; feed-forward networks; knowledge graphs; auditable AI; coding agents; larql; WalkFfn; gate-KNN; vindex; retrieval-augmented generation</dc:subject>
+  <dc:description>
+    We present an architecture in which a GitHub repository's call graph, dependency
+    graph, and environment-seam graph are encoded as a vector-indexed triple store
+    and used as the feed-forward network (FFN) layer of a language model inference
+    session. Unlike opaque neural FFN weights, this externalised representation
+    exposes every retrieval step — entity embedding, gate-vector similarity score,
+    feature slot, and target token — making the coding agent's factual associations
+    fully auditable post-hoc. We describe the implementation in terms of the larql
+    WalkFfn gate-KNN mechanism, report a critical batch-insert collision bug in the
+    larql-python bindings (VectorIndex.find_free_feature mmap/heap split), and
+    propose a dual-theory experimental design (topological vs. spectral layer
+    assignment) whose observable divergence settles whether WalkFfn encodes
+    weighted BFS structure or global spectral structure.
+  </dc:description>
+  <dc:publisher>metavacua/babel-harness (GitHub)</dc:publisher>
+  <dc:date>2026-06-29</dc:date>
+  <dc:type>ScholarlyArticle</dc:type>
+  <dc:language>en</dc:language>
+  <dc:rights>AGPL-3.0-or-later</dc:rights>
+
+  <bibliomisc role="schema-org-jsonld"><![CDATA[
+{
+  "@context": "https://schema.org",
+  "@type": "ScholarlyArticle",
+  "name": "GitHub Repository Graphs as Auditable FFN for Coding Agents",
+  "datePublished": "2026-06-29",
+  "inLanguage": "en",
+  "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+  "publisher": {
+    "@type": "Organization",
+    "name": "metavacua/babel-harness"
+  },
+  "keywords": [
+    "language models", "feed-forward networks", "knowledge graphs",
+    "auditable AI", "coding agents", "larql", "WalkFfn", "gate-KNN"
+  ]
+}
+  ]]></bibliomisc>
+
+</info>

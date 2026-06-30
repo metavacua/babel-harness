@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Testable seam: MOCK_FREE_AVAIL_MB — available memory in MB (default: 4096)
+avail="${MOCK_FREE_AVAIL_MB:-4096}"
+echo "               total        used        free      shared  buff/cache   available"
+echo "Mem:            6399        3158        2614           2         626        ${avail}"
+echo "Swap:              0           0           0"
