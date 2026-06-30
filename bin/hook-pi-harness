@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# UserPromptSubmit asyncRewake hook: dispatch every user prompt to pi-harness,
+# log the NDJSON event stream, and rewake Claude with a summary of what the
+# subagent did. Produces auditable empirical evidence of delegation behavior.
+set -euo pipefail
+
+INPUT=$(cat)
+PROMPT=$(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("prompt", ""))
+except Exception:
+    pass
+' 2>/dev/null || true)
+[ -z "${PROMPT:-}" ] && exit 0
+
+# Guard: skip hook system messages (task-notifications, rewake injections).
+# These arrive as UserPromptSubmit turns when asyncRewake fires; they are not
+# user tasks. Pattern is unique to Claude Code's hook infrastructure.
+case "$PROMPT" in
+  '<task-notification>'*) exit 0 ;;
+esac
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PI_HARNESS="${PI_HARNESS:-${SCRIPT_DIR}/pi-harness}"
+HOOK_TIMEOUT_SECONDS="${HOOK_TIMEOUT_SECONDS:-300}"
+
+LOG_DIR="${HOME}/.claude/pi-harness-runs"
+mkdir -p "$LOG_DIR"
+TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+LOG_FILE="${LOG_DIR}/${TIMESTAMP}-$$.ndjson"
+
+# Run pi-harness, capture full NDJSON stream. Hooks run in a constrained
+# environment, so invoke the sibling binary explicitly instead of relying on PATH.
+if command -v timeout >/dev/null 2>&1; then
+  timeout "$HOOK_TIMEOUT_SECONDS" "$PI_HARNESS" "$PROMPT" > "$LOG_FILE" 2>&1 || true
+else
+  "$PI_HARNESS" "$PROMPT" > "$LOG_FILE" 2>&1 || true
+fi
+
+# Extract tool execution summary from NDJSON stream. Do this in one parser so
+# zero matches remains exactly "0" (grep -c prints 0 but exits 1 on no matches).
+SUMMARY=$(python3 - "$LOG_FILE" <<'PY' 2>/dev/null || true
+import json, sys
+from collections import Counter
+path = sys.argv[1]
+names = []
+try:
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if obj.get("type") == "tool_execution_end":
+                names.append(obj.get("toolName", "?"))
+except OSError:
+    pass
+tool_names = ", ".join(f"{count}x {name}" for name, count in Counter(names).most_common(5)) or "none"
+print(f"{len(names)}\t{tool_names}")
+PY
+)
+if [ -n "$SUMMARY" ]; then
+  TOOLS_CALLED=${SUMMARY%%$'\t'*}
+  TOOL_NAMES=${SUMMARY#*$'\t'}
+else
+  TOOLS_CALLED=0
+  TOOL_NAMES=none
+fi
+
+CONTEXT="[pi-harness subagent completed]
+Task: ${PROMPT:0:200}
+Tool calls: ${TOOLS_CALLED} (${TOOL_NAMES})
+Full log: ${LOG_FILE}
+
+Review with: python3 -m json.tool ${LOG_FILE} | less"
+
+python3 -c "
+import json, sys
+print(json.dumps({
+  'hookSpecificOutput': {
+    'hookEventName': 'UserPromptSubmit',
+    'additionalContext': sys.argv[1]
+  }
+}))" "$CONTEXT"
+
+exit 0

@@ -8,3 +8,10 @@ build/
 
 # Local Claude Code settings (machine-specific, contains hook paths)
 .claude/settings.local.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Pi-harness workspace
+.pi-lens/
