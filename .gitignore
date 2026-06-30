@@ -5,3 +5,6 @@ build/
 # Temporary files
 *.tmp
 *.log
+
+# Local Claude Code settings (machine-specific, contains hook paths)
+.claude/settings.local.json
