@@ -47,6 +47,7 @@ Usage: coding-agent [OPTIONS] "TASK"
 Options:
   --model M     Force provider/model (e.g. openrouter/qwen/qwen3-235b-a22b:free
                 or larql/smollm2-360m)
+  --verbose     Pass verbose mode through to Goose
   -h, --help    Show this help
 
 Note: quote the TASK string to preserve spaces: coding-agent "write a hello function"
@@ -232,8 +233,11 @@ _run_goose_call() {
 _run_goose_openrouter() {
   local model="$1" task="$2"
   echo "coding-agent: provider=openrouter model=$model" >&2
+  local goose_args=(run)
+  [ "$VERBOSE" = "1" ] && goose_args+=(--verbose)
+  goose_args+=(-t "$task")
   GOOSE_PROVIDER=openrouter GOOSE_MODEL="$model" GOOSE_MODE=auto \
-    _run_goose_call "$GOOSE_BIN" run -t "$task"
+    _run_goose_call "$GOOSE_BIN" "${goose_args[@]}"
 }
 
 _get_larql_model_id() {
@@ -252,16 +256,20 @@ _run_goose_larql() {
   model_id=$(_get_larql_model_id "$vindex")
   echo "coding-agent: provider=larql (openai-compat) model=$model_id" >&2
   # timeout must be INSIDE _run_goose_call (not wrapping it) so PIPESTATUS[0] is the goose exit
+  local goose_args=(run)
+  [ "$VERBOSE" = "1" ] && goose_args+=(--verbose)
+  goose_args+=(-t "$task")
   GOOSE_PROVIDER=openai \
     OPENAI_BASE_URL="http://localhost:${LARQL_PORT}/v1" \
     OPENAI_API_KEY=larql \
     GOOSE_MODEL="$model_id" \
     GOOSE_MODE=auto \
-    _run_goose_call timeout "$LARQL_INFERENCE_TIMEOUT" "$GOOSE_BIN" run -t "$task"
+    _run_goose_call timeout "$LARQL_INFERENCE_TIMEOUT" "$GOOSE_BIN" "${goose_args[@]}"
 }
 
 # --- Argument parsing ---
 MODEL_OVERRIDE=""
+VERBOSE="0"
 TASK=""
 
 while [[ $# -gt 0 ]]; do
@@ -272,6 +280,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       MODEL_OVERRIDE="$2"; shift 2 ;;
+    --verbose) VERBOSE="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;  # end of options; remaining args are positional
     -*) echo "coding-agent: unknown option: $1" >&2; usage; exit 1 ;;
