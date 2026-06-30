@@ -1,5 +1,7 @@
 """Tests for graph_vindex.py — pure graph math, no larql required."""
 import sys, pathlib
+import pytest
+pytest.importorskip("networkx", reason="networkx not in system Python — run via uv run pytest")
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 
 from graph_vindex import compute_topological_assignment, compute_spectral_assignment
