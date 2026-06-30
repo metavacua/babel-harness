@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<info xmlns="http://docbook.org/ns/docbook"
+      xmlns:dc="http://purl.org/dc/terms/"
+      xmlns:schema="https://schema.org/">
+
+  <dc:title>Orchestration Defects and Residual-Stream Improvements in the research-development-loop Skill: A First-Iteration Evaluation</dc:title>
+  <dc:creator>metavacua (Claude Sonnet 4.6, 2026-06-29)</dc:creator>
+  <dc:subject>agent orchestration; skill composition; residual stream; scope classification; evaluation methodology; LFI; logic of formal inconsistency; R&D loop; babel-harness</dc:subject>
+  <dc:description>
+    We evaluate the first iteration of improvements to the research-development-loop orchestrator
+    skill for the babel-harness coding agent. Three changes were applied: a scope-classification
+    guard (Step 0.0) that routes mechanical tasks directly to Phase 3, bypassing Phases 1–2; an
+    Artifact (A) category extending the K/Q/C/E/D residual format for non-propositional verbatim
+    content; and a first-run evaluation suite of three decision-point tests. Empirical results show
+    the scope guard achieves 2.25× speed improvement on mechanical tasks but misclassifies tasks
+    with implicit underspecification. The benchmark registers 83% pass rate for the new skill versus
+    100% for the baseline — a measurement artifact caused by an assertion design mismatch rather
+    than a true regression. Most critically, the session itself demonstrates the primary defect in
+    the skill: the research-development-loop orchestrator was invoked but its Phase 5 (Scholarly
+    Review) and Phase 6 (Finishing) were never reached because the skill-creator sub-skill captured
+    control without returning it. This paper is Phase 5, executing late after explicit user
+    correction. We report all findings with equal depth for capabilities and defects, per the
+    skill's honesty mandate.
+  </dc:description>
+  <dc:publisher>metavacua/babel-harness (GitHub)</dc:publisher>
+  <dc:date>2026-06-29</dc:date>
+  <dc:type>ScholarlyArticle</dc:type>
+  <dc:language>en</dc:language>
+  <dc:rights>AGPL-3.0-or-later</dc:rights>
+
+  <bibliomisc role="schema-org-jsonld"><![CDATA[
+{
+  "@context": "https://schema.org",
+  "@type": "ScholarlyArticle",
+  "name": "Orchestration Defects and Residual-Stream Improvements in the research-development-loop Skill",
+  "datePublished": "2026-06-29",
+  "inLanguage": "en",
+  "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+  "publisher": {
+    "@type": "Organization",
+    "name": "metavacua/babel-harness"
+  },
+  "keywords": [
+    "agent orchestration", "skill composition", "residual stream",
+    "scope classification", "logic of formal inconsistency",
+    "R&D loop", "babel-harness", "evaluation methodology"
+  ]
+}
+  ]]></bibliomisc>
+
+</info>

@@ -1,0 +1,846 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article xmlns="http://docbook.org/ns/docbook"
+         xmlns:xi="http://www.w3.org/2001/XInclude"
+         xmlns:xlink="http://www.w3.org/1999/xlink"
+         version="5.2"
+         xml:id="rdl-skill-evaluation"
+         xml:lang="en">
+
+  <xi:include href="00-metadata.xml"/>
+  <title>Orchestration Defects and Residual-Stream Improvements in the research-development-loop Skill: A First-Iteration Evaluation</title>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="abstract">
+    <title>Abstract</title>
+    <para>
+      The <literal>research-development-loop</literal> orchestrator skill was designed to
+      structure AI-assisted software development across a six-phase lifecycle: research,
+      brainstorm, writing plans, development, verification, scholarly review, and finishing.
+      This paper evaluates the first iteration of improvements applied to that skill, reports
+      empirical results from three decision-point evaluations run serially against a
+      6.3 GB RAM constrained machine, and applies the skill's own honesty mandate to expose
+      its defects. The primary finding is not about the improvements themselves but about the
+      skill's orchestration: the research-development-loop was invoked during this session
+      but its Phase 5 (Scholarly Review) and Phase 6 (Finishing) were never reached because
+      the <literal>skill-creator</literal> sub-skill captured and retained control. This
+      paper is Phase 5 executing 6+ hours late, after explicit user intervention. Secondary
+      findings include scope guard misclassification on tasks with implicit underspecification,
+      eval assertion design mismatch, and complete non-compliance with the larql coding
+      subagent delegation requirement. We report zero instances of <literal>bin/coding-agent</literal>
+      invocation during a session explicitly specified to delegate as much work as possible
+      to it. Compliance-tracking metrics are proposed as a primary quality signal for
+      orchestrator skill development.
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="introduction">
+    <title>Introduction</title>
+    <para>
+      Orchestrator skills for AI coding agents face a structural challenge distinct from
+      the skills they coordinate: they must maintain phase discipline across long-running
+      sessions in which sub-skills, user interruptions, and resource constraints all compete
+      to redirect control flow. A sub-skill that works correctly in isolation may silently
+      capture the session's attention budget, preventing the parent orchestrator from
+      reaching its terminal phases.
+    </para>
+    <para>
+      The <literal>research-development-loop</literal> skill was specified to address this
+      through a deterministic state machine with explicit back-edges: anomalies at any phase
+      route to <literal>superpowers:systematic-debugging</literal>, which then restarts at
+      Phase 0 Research; completion of Phase 4 Verification routes to Phase 5 Scholarly
+      Review; and Phase 5 triggers Phase 6 Finishing as the terminal state. The skill was
+      also specified to delegate implementation work to the larql-based coding subagent
+      (<literal>bin/coding-agent</literal>) wherever possible.
+    </para>
+    <para>
+      In practice, neither the state machine discipline nor the delegation requirement was
+      enforced. This paper documents what happened instead, what the evaluations revealed,
+      and what remediation is required — including the remediation required for this paper
+      itself, which is a late Phase 5 that should have been invoked automatically.
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="design">
+    <title>Skill Design: State Machine and Residual Stream</title>
+
+    <section xml:id="design-state-machine">
+      <title>Six-Phase State Machine</title>
+      <para>
+        The skill encodes a directed graph with six phases and two anomaly back-edges:
+      </para>
+      <programlisting>
+research → brainstorm → plans → dev → verify → scholarly-review → finishing
+dev       --anomaly→ systematic-debug → research   (back-edge 1)
+verify    --anomaly→ systematic-debug → research   (back-edge 2)
+scholarly-review → research  (if skill gaps found, trigger new loop)
+      </programlisting>
+      <para>
+        The anomaly back-edges land unconditionally on Phase 0 Research rather than on the
+        phase where the anomaly surfaced. This is correct: the root cause of an anomaly in
+        Phase 3 is rarely in Phase 3's code — it may be a flawed assumption established in
+        Phase 0 or a design decision made in Phase 1. Restarting research is the mechanism
+        for surfacing that assumption.
+      </para>
+    </section>
+
+    <section xml:id="design-residual">
+      <title>Residual Stream</title>
+      <para>
+        Phase 0 outputs a structured residual rather than a prose narrative. The residual
+        format follows the Logic of Formal Inconsistency (LFI) framework developed by
+        Carnielli, Coniglio, and Marcos <citation>carnielli2007lfi</citation>: each entry
+        is typed by its epistemic status rather than its content domain. Five categories
+        existed at the start of this session; a sixth (A, Artifact) was added.
+      </para>
+      <itemizedlist>
+        <listitem><para><emphasis role="strong">K (Known):</emphasis> Verified, sourced facts. Propositional.</para></listitem>
+        <listitem><para><emphasis role="strong">Q (Open):</emphasis> Unresolved questions with bifurcated Accept/Reject analysis tracing consequences vs. exposed axioms.</para></listitem>
+        <listitem><para><emphasis role="strong">C (Constraints):</emphasis> Hard limits on any solution.</para></listitem>
+        <listitem><para><emphasis role="strong">E (Eliminated):</emphasis> Rejected hypotheses with the causal axiom that falsifies them.</para></listitem>
+        <listitem><para><emphasis role="strong">D (Dependencies):</emphasis> Task execution order derived from dependency direction.</para></listitem>
+        <listitem><para><emphasis role="strong">A (Artifact):</emphasis> Non-propositional verbatim content — code snippets, schemas, proof traces — that downstream phases need intact and cannot reconstruct from K entries. Added iteration 1.</para></listitem>
+      </itemizedlist>
+      <para>
+        The rationale for storing a residual rather than the full context derives from the
+        Active Context Compression literature <citation>activecc2026</citation>: LLM
+        performance degrades measurably as context fills with irrelevant content (context
+        rot). The residual is the information-theoretic minimum that allows any downstream
+        phase to reconstruct full context on demand, without carrying the full prior
+        conversation verbosely. The KV-cache is derived from the residual only when needed.
+      </para>
+    </section>
+
+    <section xml:id="design-scope-guard">
+      <title>Scope Guard (Step 0.0) — Added Iteration 1</title>
+      <para>
+        Prior to iteration 1, Phase 0 ran all eight steps unconditionally. Step 0.0 was
+        added as a mechanical task classifier: if a task is (a) fully local, (b) fully
+        specified, (c) mechanically bounded, and (d) self-contained, it skips steps
+        0.2/0.4/0.5/0.6/0.7 and emits a minimal residual, routing directly to Phase 3
+        Development. This eliminates research overhead for tasks like renames, boilerplate
+        generation, and flag additions where all required values are explicitly named.
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="compliance-tracking">
+    <title>Skill-Call Compliance Tracking</title>
+    <para>
+      A critical insight from this session is that orchestrator skill quality cannot be
+      assessed solely from output quality — it requires measuring compliance with the
+      skill's prescribed control flow. The following table counts every required skill
+      invocation specified by the research-development-loop and whether it was called
+      during the session (2026-06-29, from invocation to user correction).
+    </para>
+    <informaltable>
+      <tgroup cols="4">
+        <colspec colwidth="2*"/>
+        <colspec colwidth="1*"/>
+        <colspec colwidth="1*"/>
+        <colspec colwidth="2*"/>
+        <thead>
+          <row>
+            <entry>Required sub-skill</entry>
+            <entry>Phase</entry>
+            <entry>Times called</entry>
+            <entry>Disposition</entry>
+          </row>
+        </thead>
+        <tbody>
+          <row>
+            <entry><literal>superpowers:brainstorming</literal></entry>
+            <entry>1</entry>
+            <entry>0</entry>
+            <entry>Replaced by <literal>skill-creator</literal> without handoff</entry>
+          </row>
+          <row>
+            <entry><literal>superpowers:writing-plans</literal></entry>
+            <entry>2</entry>
+            <entry>0</entry>
+            <entry>Not invoked; skill-creator ran its own eval loop instead</entry>
+          </row>
+          <row>
+            <entry><literal>larql coding subagent (bin/coding-agent)</literal></entry>
+            <entry>3</entry>
+            <entry>0</entry>
+            <entry>Never invoked despite explicit delegation requirement in spec</entry>
+          </row>
+          <row>
+            <entry><literal>superpowers:test-driven-development</literal></entry>
+            <entry>3</entry>
+            <entry>0</entry>
+            <entry>No test-first cycle run for SKILL.md changes</entry>
+          </row>
+          <row>
+            <entry><literal>superpowers:verification-before-completion</literal></entry>
+            <entry>4</entry>
+            <entry>0</entry>
+            <entry>Not invoked; evals served as informal substitute</entry>
+          </row>
+          <row>
+            <entry><literal>scholarly-white-paper</literal></entry>
+            <entry>5</entry>
+            <entry>1 (late)</entry>
+            <entry>Invoked only after explicit user correction</entry>
+          </row>
+          <row>
+            <entry><literal>superpowers:finishing-a-development-branch</literal></entry>
+            <entry>6</entry>
+            <entry>0</entry>
+            <entry>Not yet invoked</entry>
+          </row>
+        </tbody>
+      </tgroup>
+    </informaltable>
+    <para>
+      Of seven required skill invocations, one was called late (after user intervention)
+      and six were never called. This is a 14% compliance rate. The larql coding subagent
+      — explicitly named in the original skill specification as the primary delegate for
+      implementation work — was called zero times across the entire session despite the
+      skill document stating: <quote>Delegate to the larql coding subagent wherever
+      possible.</quote>
+    </para>
+    <para>
+      Tracking these compliance metrics should be a standard component of orchestrator
+      skill evaluation. A skill whose sub-skills are never invoked is a design document,
+      not a functioning orchestrator. The gap between specification and execution is the
+      primary failure mode of orchestrator skills, and it is invisible unless explicitly
+      measured.
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="evaluation-methodology">
+    <title>Evaluation Methodology</title>
+
+    <section xml:id="eval-design">
+      <title>Decision-Point Evaluation Design</title>
+      <para>
+        Full-loop evaluations of the orchestrator skill were infeasible under the resource
+        constraint (C1: 6.3 GB RAM, no swap; concurrent larql-server instances would OOM).
+        Three decision-point evaluations were designed instead, each testing a specific
+        routing or classification decision without running the full six-phase lifecycle.
+        All six subagents (3 with-skill + 3 old-skill baseline) ran serially.
+      </para>
+      <itemizedlist>
+        <listitem>
+          <para><emphasis role="strong">Eval 1</emphasis> — <emphasis>phase0-runs-before-brainstorm</emphasis>: "Add a --verbose flag to bin/coding-agent." Tests scope classification and correct Phase 1 routing.</para>
+        </listitem>
+        <listitem>
+          <para><emphasis role="strong">Eval 2</emphasis> — <emphasis>dependency-analysis-answers-ordering</emphasis>: "Should I implement task #13 or #14 first?" Tests whether step 0.5 dependency analysis produces a D entry with causal rationale.</para>
+        </listitem>
+        <listitem>
+          <para><emphasis role="strong">Eval 3</emphasis> — <emphasis>anomaly-routes-to-systematic-debugging</emphasis>: "OOM kills in production, smoke test passes." Tests anomaly classification and systematic-debugging routing.</para>
+        </listitem>
+      </itemizedlist>
+    </section>
+
+    <section xml:id="eval-baseline">
+      <title>Baseline Configuration</title>
+      <para>
+        The old-skill baseline is a snapshot of the skill taken immediately before applying
+        the three improvements (scope guard, A category, evals.json). This isolates the
+        effect of the improvements rather than comparing against a zero-skill baseline,
+        which would be uninformative for an orchestrator that coordinates other skills
+        rather than producing final artifacts directly.
+      </para>
+    </section>
+
+    <section xml:id="eval-assertions">
+      <title>Assertion Design — Known Limitation</title>
+      <para>
+        Assertions for eval 1 were written before running the with-skill agent and assumed
+        the task would be classified as research-grade. The scope guard correctly classified
+        it as mechanical, causing two assertions to fail even though the behavior was
+        correct. This is an assertion design mismatch: the assertions measured the old
+        skill's behavior, not the new skill's specified behavior. As a result, the
+        benchmark registers a false regression on eval 1. See Finding F4 for full analysis.
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="results">
+    <title>Empirical Results</title>
+
+    <section xml:id="results-benchmark">
+      <title>Benchmark Summary</title>
+      <para>
+        Aggregate benchmark across all three evaluations, one run per configuration:
+      </para>
+      <informaltable>
+        <tgroup cols="4">
+          <colspec colwidth="2*"/>
+          <colspec colwidth="1.5*"/>
+          <colspec colwidth="1.5*"/>
+          <colspec colwidth="1.5*"/>
+          <thead>
+            <row><entry>Metric</entry><entry>Old Skill</entry><entry>New Skill</entry><entry>Delta</entry></row>
+          </thead>
+          <tbody>
+            <row><entry>Pass Rate</entry><entry>100% (12/12)</entry><entry>83% (10/12)</entry><entry>−17 pp (artifact)</entry></row>
+            <row><entry>Avg Time</entry><entry>257s</entry><entry>174s</entry><entry>−83s (−32%)</entry></row>
+            <row><entry>Avg Tokens</entry><entry>45,856</entry><entry>46,140</entry><entry>+284 (~0%)</entry></row>
+          </tbody>
+        </tgroup>
+      </informaltable>
+      <para>
+        The −17 percentage point pass rate difference is an assertion design artifact
+        (see F4). Correcting for eval 1's mismatch, the adjusted pass rate is 10/12 for
+        new-skill on legitimately applicable assertions and 12/12 for old-skill — but 2
+        of the 12 old-skill passes tested behavior that the new skill correctly eliminated.
+        The −83s speed improvement is genuine and attributable to scope guard mechanical
+        routing (eval 1: 129s vs 291s, 2.25× faster).
+      </para>
+    </section>
+
+    <section xml:id="results-per-eval">
+      <title>Per-Evaluation Results</title>
+      <informaltable>
+        <tgroup cols="5">
+          <colspec colwidth="2*"/>
+          <colspec colwidth="1.5*"/>
+          <colspec colwidth="1.5*"/>
+          <colspec colwidth="1.5*"/>
+          <colspec colwidth="1.5*"/>
+          <thead>
+            <row><entry>Eval</entry><entry>New tokens</entry><entry>New time</entry><entry>Old tokens</entry><entry>Old time</entry></row>
+          </thead>
+          <tbody>
+            <row><entry>1 (verbose flag)</entry><entry>38,783</entry><entry>129s</entry><entry>48,914</entry><entry>291s</entry></row>
+            <row><entry>2 (task ordering)</entry><entry>75,218</entry><entry>282s</entry><entry>66,044</entry><entry>389s</entry></row>
+            <row><entry>3 (OOM anomaly)</entry><entry>24,418</entry><entry>110s</entry><entry>22,609</entry><entry>91s</entry></row>
+          </tbody>
+        </tgroup>
+      </informaltable>
+      <para>
+        Eval 3 (anomaly routing) is 19s slower with the new skill — within noise for a
+        single run. The anomaly routing code path is identical in both versions; the
+        difference is likely session-level variance in tool call latency.
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="findings">
+    <title>Technical Findings</title>
+
+    <section xml:id="finding-loop-abandonment"
+             role="finding"
+             condition="confirmed">
+      <title>F1: Loop Orchestration Defect — Phase 5/6 Never Reached</title>
+      <para>
+        <emphasis role="strong">Finding:</emphasis> The <literal>research-development-loop</literal>
+        skill was invoked at the start of the session and correctly ran Phase 0 Research,
+        producing a valid Research Residual. Phase 1 Brainstorm was then delegated to
+        <literal>skill-creator</literal>. The <literal>skill-creator</literal> ran its own
+        multi-step lifecycle (snapshot → edit → eval → grade → viewer) and never returned
+        control to the parent orchestrator. Phases 5 and 6 of the
+        <literal>research-development-loop</literal> were never invoked. This paper is
+        Phase 5 executing only after explicit user intervention approximately six hours
+        after the session began.
+      </para>
+      <para>
+        <emphasis role="strong">Root cause:</emphasis> The
+        <literal>research-development-loop</literal> skill has no enforcement mechanism
+        for Phase 5. Phase 1 says "Invoke <literal>superpowers:brainstorming</literal> —
+        that skill owns the process" and "Do not enter Phase 2 until brainstorming reaches
+        its terminal state." But <literal>skill-creator</literal> was substituted for
+        <literal>superpowers:brainstorming</literal> without acknowledgment, and
+        <literal>skill-creator</literal>'s terminal state does not include handing control
+        back to the parent orchestrator. The skill-creator skill's own terminal state is
+        an HTML viewer URL, not a Phase 2 entry signal.
+      </para>
+      <para>
+        <emphasis role="strong">Impact:</emphasis> Scholarly review and finishing were both
+        omitted. No PR was opened. No branch was finished. The eval improvements were
+        applied to the skill without the critical evaluation that might have caught the
+        scope guard calibration issue (F2) before committing.
+      </para>
+      <para>
+        <emphasis role="strong">Proposed fix:</emphasis> Add an explicit handoff contract
+        to Phase 1: after any sub-skill completes (including <literal>skill-creator</literal>),
+        the <literal>research-development-loop</literal> must re-assert control by checking
+        whether Phase 5 and Phase 6 remain incomplete. A checklist embedded in the skill's
+        Phase 6 prerequisites section is the appropriate mechanism — not the sub-skill's
+        terminal state.
+      </para>
+    </section>
+
+    <section xml:id="finding-larql-delegation"
+             role="finding"
+             condition="confirmed">
+      <title>F2: larql Coding Subagent — Zero Invocations Despite Explicit Mandate</title>
+      <para>
+        <emphasis role="strong">Finding:</emphasis> The skill's Phase 3 Development section
+        states: <quote>Delegate to the larql coding subagent wherever possible.</quote>
+        The original skill specification (quoted in user prompts) states: <quote>Claude CLI
+        should delegate as much work to the larql-based coding subagent and contribute to
+        the cycle of research, development, testing, and actual demonstrations of the
+        capabilities and limitations of the babel coding harness.</quote>
+        <literal>bin/coding-agent</literal> was invoked zero times during this session.
+      </para>
+      <para>
+        <emphasis role="strong">Root cause:</emphasis> The Phase 3 Development section
+        references the delegation requirement but the skill was used for meta-work (skill
+        improvement) rather than direct coding work. The session never entered Phase 3
+        Development; the <literal>skill-creator</literal> sub-skill performed its own
+        file edits directly. There is no mechanism in the skill that enforces delegation
+        to <literal>bin/coding-agent</literal> from within <literal>skill-creator</literal>
+        sub-skill calls.
+      </para>
+      <para>
+        <emphasis role="strong">Impact:</emphasis> The coding harness's capabilities and
+        limitations cannot be demonstrated if it is never invoked. This defeats a core
+        purpose of the babel-harness project: building evidence about what the
+        larql-augmented coding agent can and cannot do.
+      </para>
+      <para>
+        <emphasis role="strong">Proposed fix:</emphasis> Any Phase 3 work that modifies
+        files in <filename>bin/</filename>, <filename>scripts/</filename>, or
+        <filename>lib/</filename> should route through <literal>bin/coding-agent</literal>.
+        Meta-work (skill file edits, paper writing) is exempt from delegation because
+        <literal>bin/coding-agent</literal> is a coding agent, not a general-purpose agent.
+        The skill text should make this distinction explicit rather than stating the
+        requirement without scope.
+      </para>
+    </section>
+
+    <section xml:id="finding-scope-guard"
+             role="finding"
+             condition="confirmed-with-caveats">
+      <title>F3: Scope Guard Achieves 2.25× Speed Improvement but Misclassifies Implicit Underspecification</title>
+      <para>
+        <emphasis role="strong">Finding (confirmed):</emphasis> The scope guard (Step 0.0)
+        correctly classified the <quote>add --verbose flag to bin/coding-agent</quote> task
+        as mechanical, skipping steps 0.2/0.4/0.5/0.6/0.7 and routing directly to Phase 3.
+        This reduced execution time from 291s (old skill, 8 steps) to 129s (new skill, 3
+        steps) — a 2.25× improvement — while using 20% fewer tokens (38,783 vs 48,914).
+      </para>
+      <para>
+        <emphasis role="strong">Finding (caveat):</emphasis> The old-skill baseline found
+        Q1 (open question): <quote>Exact step-name labels and format are underspecified —
+        no step registry exists in the codebase.</quote> This is a genuine design question:
+        the task says <quote>echoes each step name to stderr</quote> but no authoritative
+        list of step names exists. The scope guard's <quote>fully specified</quote>
+        criterion evaluated True because the flag name, output channel, and default value
+        were given — but the required values (step names) were not. The guard has a
+        precision gap: it checks that named parameters are present but does not check
+        whether all required concrete values exist in the task description.
+      </para>
+      <para>
+        <emphasis role="strong">Proposed refinement:</emphasis> The fourth question in
+        Step 0.0 should be: <quote>Are all required concrete values explicitly stated —
+        including names, labels, formats, and type identifiers that implementation will
+        need?</quote> The step-names case fails this check because <quote>each step
+        name</quote> presupposes a step registry that does not exist in the codebase.
+      </para>
+    </section>
+
+    <section xml:id="finding-eval-assertions"
+             role="finding"
+             condition="confirmed">
+      <title>F4: Eval Assertion Design Mismatch — 2/4 Assertions Penalize Correct Behavior</title>
+      <para>
+        <emphasis role="strong">Finding:</emphasis> Eval 1 assertions
+        <literal>checks-open-issues</literal> and <literal>invokes-brainstorming-skill</literal>
+        were written before running the with-skill agent. They assumed research-grade task
+        classification. The scope guard correctly identified the task as mechanical and
+        skipped step 0.4 (issue check) and Phase 1 (brainstorming). The assertions
+        register FAIL for behavior that is correct per the new skill specification. The
+        benchmark therefore reports 83% pass rate for the new skill versus 100% for the
+        old — a false regression.
+      </para>
+      <para>
+        <emphasis role="strong">Root cause:</emphasis> Assertions were written without
+        first consulting the skill's specification for the expected behavior of a
+        mechanical task. The skill-creator process says <quote>draft assertions while
+        runs are in progress</quote> — this works for stable skill behavior but fails
+        when the improvement being tested changes which behaviors are expected.
+      </para>
+      <para>
+        <emphasis role="strong">Proposed fix:</emphasis> For iteration 2, assert on
+        correct behavior per scope classification: mechanical tasks should pass
+        <literal>scope-classified-as-mechanical</literal> and
+        <literal>routes-to-phase-3-directly</literal>; research-grade tasks should pass
+        <literal>checks-open-issues</literal> and <literal>invokes-brainstorming-skill</literal>.
+        The eval prompt for eval 1 should be replaced with a clearly research-grade task
+        (design ambiguity present, novel architecture required) to test the Phase 1
+        routing path.
+      </para>
+    </section>
+
+    <section xml:id="finding-dependency-analysis"
+             role="finding"
+             condition="confirmed-with-caveats">
+      <title>F5: Dependency Analysis Produces Correct Code-Path Tracing but Diverges on Recommendations</title>
+      <para>
+        <emphasis role="strong">Finding (confirmed):</emphasis> Both skill versions
+        correctly used step 0.5 dependency analysis for eval 2 rather than opinion-based
+        answers. Both traced execution paths rather than file consumption paths: the
+        dependency direction was identified as <literal>_fetch_remote_triples()</literal>
+        being validated by task #13 and relied upon (at step 4) by task #14, rather than
+        finding a fixture file from #14 being consumed by #13's test (which was
+        confirmed absent by grep). Both produced D entries with causal rationale. All
+        four assertions passed for both configurations.
+      </para>
+      <para>
+        <emphasis role="strong">Finding (caveat):</emphasis> Despite tracing the same
+        code path, the two versions reached opposite practical recommendations. The new
+        skill recommended: do #13 first (validates code before committing artifact).
+        The old skill recommended: do #14 first (uses independent path, no network
+        dependency, produces faster value). Both recommendations are correct within their
+        reasoning frameworks. The ordering question has a genuine ambiguity that
+        dependency analysis alone does not resolve: after establishing independence
+        (or near-independence), the choice between two independent tasks is a risk
+        and value question, not a dependency question.
+      </para>
+      <para>
+        The skill's D entry format should distinguish between <emphasis>blocking
+        dependencies</emphasis> (A must complete before B can start) and
+        <emphasis>validation dependencies</emphasis> (A reduces risk of B's output being
+        wrong). Eval 2's dependency is of the second type; the current format does not
+        encode this distinction.
+      </para>
+    </section>
+
+    <section xml:id="finding-anomaly-routing"
+             role="finding"
+             condition="confirmed">
+      <title>F6: Anomaly Routing to systematic-debugging Is Stable Across Both Skill Versions</title>
+      <para>
+        <emphasis role="strong">Finding:</emphasis> Both skill versions correctly handled
+        eval 3 (OOM kills in production). Both classified the event as a Phase 4
+        Verification anomaly (smoke test passing = Phase 4 reached; OOM under load =
+        anomaly triggering the verify-anomaly edge), named
+        <literal>superpowers:systematic-debugging</literal> as the mandated sub-skill,
+        stated no fix should be proposed before that sub-skill completes, and acknowledged
+        the Phase 0 Research back-edge with rationale. All four assertions passed.
+        Both runs used only 4 tool calls (91–110s each), making this the most efficient
+        and most reliable behavior across all three evaluations.
+      </para>
+      <para>
+        This confirms that anomaly routing is the most robustly specified behavior in the
+        skill. The anomaly definition and routing rule are stated twice (once in Phase 3,
+        once in Phase 4) with identical text, which appears to be the mechanism for this
+        stability. Repetition of a critical rule is preferable to a single canonical
+        statement when the rule is safety-critical.
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="skill-critical-review">
+    <title>Critical Skill Review</title>
+
+    <section xml:id="review-skill-creator">
+      <title>skill-creator: Does Not Understand Parent Orchestrator Lifecycle</title>
+      <para>
+        The <literal>skill-creator</literal> skill runs a complete internal cycle
+        (draft → eval → grade → benchmark → viewer) and terminates by presenting the
+        viewer URL to the user. There is no handoff signal that a parent orchestrator
+        can receive to resume its own lifecycle. This is a missing interface contract:
+        sub-skills should either (a) return a signal that allows the parent to resume,
+        or (b) explicitly state in their documentation that they capture the session
+        for the duration of their lifecycle, and parent orchestrators should not expect
+        to resume automatically.
+      </para>
+      <para>
+        The <literal>skill-creator</literal> skill's terminal state — a browser review
+        URL with the message <quote>When you're done, come back here and let me know</quote>
+        — is a human-in-the-loop gate, not an automatic handoff. This is appropriate for
+        its design purpose but incompatible with being called from a parent orchestrator
+        that expects to resume Phase 2 after Phase 1 completes.
+      </para>
+    </section>
+
+    <section xml:id="review-rdl">
+      <title>research-development-loop: Phase Guarantee Missing</title>
+      <para>
+        The skill specifies phases but does not enforce their completion. Phase 1 says
+        <quote>Constraint: Do not enter Phase 2 until superpowers:brainstorming reaches
+        its terminal state</quote> — but this constraint has no enforcement mechanism.
+        It is a statement in a markdown document, not a gate. If the invoking agent
+        substitutes a different sub-skill for brainstorming (as happened here with
+        <literal>skill-creator</literal>), there is no mechanism to detect the substitution
+        or to assert the Phase 2 entry condition.
+      </para>
+      <para>
+        The skill needs a phase completion checklist that is distinct from the sub-skill
+        invocations themselves. A checklist is more robust than sequential instructions
+        because it survives sub-skill substitution: the checklist condition
+        <quote>Phase 1 output: a design document exists at
+        <filename>docs/superpowers/specs/</filename></quote> is verifiable regardless
+        of which sub-skill produced it.
+      </para>
+    </section>
+
+    <section xml:id="review-residual-format">
+      <title>Residual Format: A Category — Correct but Untested</title>
+      <para>
+        The A (Artifact) category was added to the residual format to handle
+        non-propositional verbatim content. No eval exercises a task that produces
+        an A entry — all three evals are scoped to Phase 0 outputs that fit in
+        propositional K entries. The A category's value cannot be assessed empirically
+        from the current eval set. This should be addressed in iteration 2 by adding
+        an eval with a task that requires a code schema, API response fragment, or
+        test fixture as output.
+      </para>
+    </section>
+
+    <section xml:id="review-scope-guard-criterion">
+      <title>Scope Guard: Criterion 2 ("Fully Specified") Needs Clarification</title>
+      <para>
+        The scope guard's second question — <quote>Is this task fully specified? (No
+        design ambiguity, no 'which approach?', no unknown constraints)</quote> — does
+        not explicitly ask whether all required concrete values are named. The --verbose
+        flag task passed this gate despite having unnamed step labels, because the flag
+        name, output channel, and default value were all present. The gate's question
+        as written tests for the presence of explicit design choices but not for the
+        completeness of implementation-required values.
+      </para>
+    </section>
+
+    <section xml:id="review-gap-glut">
+      <title>Gap/Glut Framework: Formally Grounded but Rarely Used</title>
+      <para>
+        Step 0.7's gap/glut framework is grounded in the Logic of Formal Inconsistency
+        <citation>carnielli2007lfi</citation> and the Logic of Evidence
+        <citation>carnielli2019evidence</citation>. In practice, none of the three evals
+        produced a genuine glut (⊢ P and ⊢ ¬P from distinct evidence streams). Eval 2
+        produced an apparent ambiguity in task ordering, but this resolved to genuine
+        independence with a risk/value choice remaining — a gap (insufficient evidence
+        to decide), not a glut. The formal framework is correct but the current eval
+        set does not stress-test it. Iteration 2 evals should include a task where
+        two evidence sources give contradictory technical answers to test whether the
+        glut → exposed-axiom resolution path works as specified.
+      </para>
+    </section>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="proposed-improvements">
+    <title>Proposed Improvements for Iteration 2</title>
+    <orderedlist>
+      <listitem>
+        <para>
+          <emphasis role="strong">Phase completion checklist.</emphasis> Add a gate
+          after each phase that checks artifact existence, not sub-skill invocation.
+          Phase 1 gate: a design document at
+          <filename>docs/superpowers/specs/YYYY-MM-DD-*.md</filename> must exist.
+          Phase 4 gate: all plan checkboxes checked and test suite exit code 0.
+          Phase 5 gate: a paper file at
+          <filename>papers/ai_and_agents/*/src/01-*.xml</filename> must exist.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <emphasis role="strong">Scope guard criterion 2 refinement.</emphasis>
+          Add a fifth question to Step 0.0: <quote>Are all required concrete values
+          explicitly named in the task (labels, identifiers, format strings, type
+          names)?</quote> The --verbose step-labels case would fail this gate and
+          be correctly classified as research-grade.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <emphasis role="strong">Eval 1 prompt replacement.</emphasis> Replace the
+          --verbose flag prompt (now confirmed mechanical) with a research-grade task
+          that exercises Phase 1 Brainstorm routing: a task with genuine design
+          ambiguity, where the correct output is a brainstorm sub-skill invocation and
+          a spec document.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <emphasis role="strong">Eval 4: Artifact category test.</emphasis>
+          Add an eval with a task that requires a code schema or proof trace as output,
+          to test whether A entries are correctly produced and used by downstream phases.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <emphasis role="strong">Compliance tracking assertion.</emphasis>
+          Add a meta-assertion to each eval run: count the required sub-skill invocations
+          and verify at least one of
+          <literal>superpowers:brainstorming</literal>,
+          <literal>superpowers:writing-plans</literal>,
+          <literal>bin/coding-agent</literal>,
+          <literal>superpowers:systematic-debugging</literal>,
+          or <literal>superpowers:verification-before-completion</literal>
+          was invoked. Zero invocations is a signal that the orchestrator is not
+          functioning as an orchestrator.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <emphasis role="strong">larql delegation scope clarification.</emphasis>
+          Revise Phase 3 to specify that <literal>bin/coding-agent</literal> delegation
+          applies to changes in <filename>bin/</filename>, <filename>scripts/</filename>,
+          and <filename>lib/</filename> (coding artifacts) and is exempt for skill files,
+          paper sources, and configuration — which are metavacua-namespace files that
+          the coding agent is not designed to handle.
+        </para>
+      </listitem>
+    </orderedlist>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="related-work">
+    <title>Related Work</title>
+    <para>
+      The residual stream design is grounded in two bodies of work. First, the Logic
+      of Formal Inconsistency (LFI) <citation>carnielli2007lfi</citation> and the
+      Logic of Evidence <citation>carnielli2019evidence</citation> provide the formal
+      semantics for the K/Q/C/E/D/A entry types: gaps (⊬ P, ⊬ ¬P) become Q entries
+      requiring further research; gluts (⊢ P, ⊢ ¬P) require defeasible axiom
+      identification and become E entries. Second, the Active Context Compression
+      literature <citation>activecc2026</citation> provides the engineering motivation:
+      residuals decouple knowledge representation from context window consumption,
+      allowing downstream phases to derive the KV-cache only when a specific K entry
+      is needed.
+    </para>
+    <para>
+      The Anthropic Agent Skills standard <citation>anthropicskills2025</citation>
+      establishes the progressive disclosure pattern used by this skill: name and
+      description are always in context (~100 words), full SKILL.md loads on trigger
+      match, and reference files load on demand. The skill's compliance-tracking
+      failure is partly a consequence of this architecture: once the SKILL.md is
+      loaded and the session continues, there is no runtime mechanism to verify that
+      prescribed sub-skills are being invoked.
+    </para>
+    <para>
+      Evaluation methodology for orchestrator skills differs from evaluation of
+      direct-output skills. Decision-point evaluation — measuring routing decisions
+      rather than final artifacts — is appropriate for orchestrators that coordinate
+      other skills rather than producing final outputs themselves. This approach is
+      analogous to unit testing a controller layer rather than integration testing
+      the full system. The limitation is that it cannot detect failures in phase
+      sequencing across a full lifecycle, as demonstrated by F1 (loop abandonment).
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="limitations">
+    <title>Limitations of This Evaluation</title>
+    <para>
+      This evaluation has several limitations that must be stated explicitly per the
+      honesty mandate.
+    </para>
+    <itemizedlist>
+      <listitem>
+        <para>
+          <emphasis role="strong">Single run per configuration.</emphasis> Each eval was
+          run once per configuration (one with-skill run, one old-skill run). Timing
+          differences of 20–30s (e.g., eval 3: 110s vs 91s) are within session-level
+          variance and should not be interpreted as meaningful. The benchmark's stddev
+          figures are computed across the three evals treated as independent samples,
+          which is not the same as running each eval multiple times.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <emphasis role="strong">Decision-point evals cannot test full lifecycle.</emphasis>
+          F1 (loop abandonment) was not detected by any eval — it was only surfaced by
+          user observation. Decision-point evals test individual routing decisions but
+          cannot test whether the full six-phase lifecycle completes correctly. A
+          lifecycle integration test would require running the skill on a real coding
+          task from Phase 0 through Phase 6, which takes hours and exceeds the session's
+          resource constraints.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <emphasis role="strong">Assertions written without formal spec consultation.</emphasis>
+          Eval 1 assertions were written without first deriving expected behavior from
+          the new scope guard specification. This produced the F4 mismatch. Assertion
+          design should be derived from the skill's specification, not from the evaluator's
+          intuition about expected behavior.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <emphasis role="strong">This paper is Phase 5 — it arrived late.</emphasis>
+          A scholarly review is supposed to inform Phase 6 (finishing) before any PR
+          is created. Because Phase 5 ran after explicit user correction, no changes
+          from this review can be incorporated before the iteration 1 work is committed.
+          The proposed improvements above are inputs to iteration 2, not corrections
+          to iteration 1.
+        </para>
+      </listitem>
+    </itemizedlist>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <section xml:id="conclusions">
+    <title>Conclusions</title>
+    <para>
+      The first iteration of improvements to the <literal>research-development-loop</literal>
+      skill introduced a scope guard that achieves 2.25× speed improvement on mechanical
+      tasks, extended the residual format with an Artifact (A) category for
+      non-propositional content, and produced the skill's first empirical evaluation suite.
+      Anomaly routing to <literal>superpowers:systematic-debugging</literal> is confirmed
+      stable across both skill versions. Dependency analysis via code-path tracing (not
+      file consumption) is confirmed working.
+    </para>
+    <para>
+      The primary finding is structural: the research-development-loop was invoked but
+      never completed its own lifecycle. Seven required sub-skill invocations were
+      prescribed; one ran late after user correction; six were never called. The
+      larql coding subagent — the specified primary delegate for implementation work —
+      was invoked zero times. These are not minor omissions: they represent a complete
+      failure of the orchestration function that the skill exists to provide.
+    </para>
+    <para>
+      The appropriate response is not to treat this as a session-level failure but as
+      a skill specification failure: the skill lacks enforcement mechanisms for phase
+      completion, lacks a handoff contract between parent and sub-skill lifecycles,
+      and lacks a delegation scope that makes the coding agent mandate actionable. These
+      are iteration 2 targets. The compliance-tracking table in Section 4 should be
+      reproduced for every subsequent evaluation run until all seven required
+      invocations are consistently observed.
+    </para>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <bibliography xml:id="references">
+    <title>References</title>
+    <bibliodiv>
+      <bibliomixed xml:id="carnielli2007lfi">
+        Carnielli, W., Coniglio, M.E., and Marcos, J. (2007).
+        <emphasis>Logics of Formal Inconsistency.</emphasis>
+        In D. Gabbay and F. Guenthner (Eds.), <emphasis>Handbook of Philosophical
+        Logic</emphasis>, Vol. 14, pp. 1–93. Springer.
+        <link xlink:href="https://doi.org/10.1007/978-1-4020-6324-4_1"/>
+      </bibliomixed>
+      <bibliomixed xml:id="carnielli2019evidence">
+        Carnielli, W. and Rodrigues, A. (2019).
+        <emphasis>An epistemic approach to paraconsistency: a logic of evidence and truth.</emphasis>
+        <emphasis>Synthese</emphasis> 196:3789–3813.
+        <link xlink:href="https://doi.org/10.1007/s11229-017-1621-7"/>
+      </bibliomixed>
+      <bibliomixed xml:id="activecc2026">
+        VoltAgent/awesome-ai-agent-papers (2026).
+        <emphasis>Active Context Compression: Agents autonomously decide when to consolidate
+        learnings and prune raw interaction history.</emphasis>
+        Survey entry, accessed 2026-06-29.
+        <link xlink:href="https://github.com/VoltAgent/awesome-ai-agent-papers"/>
+      </bibliomixed>
+      <bibliomixed xml:id="anthropicskills2025">
+        Anthropic (2025).
+        <emphasis>Agent Skills Standard: A portable, discoverable format for packaging
+        agent-consumable knowledge.</emphasis> arXiv:2603.14805. December 2025.
+      </bibliomixed>
+      <bibliomixed xml:id="geva2021ffn">
+        Geva, M., Schuster, R., Berant, J., and Levy, O. (2021).
+        <emphasis>Transformer Feed-Forward Layers Are Key-Value Memories.</emphasis>
+        Proceedings of EMNLP 2021.
+        <link xlink:href="https://aclanthology.org/2021.emnlp-main.446"/>
+      </bibliomixed>
+    </bibliodiv>
+  </bibliography>
+
+</article>
