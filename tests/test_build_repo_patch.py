@@ -356,3 +356,41 @@ def test_remote_and_vindexfile_mutually_exclusive(tmp_path):
         text=True,
     )
     assert proc.returncode != 0, "--remote and --vindexfile should conflict"
+
+
+@needs_larql
+@needs_network
+def test_remote_flag_builds_vlp_from_github(tmp_path):
+    """--remote fetches metavacua/babel-harness@94485d4 graph and builds a .vlp.
+
+    Uses metavacua/babel-harness (public, metavacua-owned) — GET-only, security constraint
+    prevents POST/PATCH/DELETE to any non-metavacua repo.
+
+    VLP format: PatchOp::Insert (WALK-visible via overrides_gate), NOT insert_knn.
+    Architecture pivot documented in 2026-06-29-repo-patch-builder.md deviations section.
+    """
+    out = tmp_path / "remote.vlp"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(pathlib.Path(__file__).parent.parent / "scripts/build_repo_patch.py"),
+            "--remote", "metavacua/babel-harness@94485d4",
+            "--base-vindex", str(BASE_VINDEX),
+            "--output", str(out),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"--remote build failed:\nstdout={proc.stdout[-1000:]}\nstderr={proc.stderr[-1000:]}"
+    )
+    assert out.exists(), ".vlp file was not created"
+    data = json.loads(out.read_text())
+    ops = data.get("operations", [])
+    assert len(ops) > 0, "no operations in remote-built .vlp"
+    assert all(op.get("op") == "insert" for op in ops), (
+        f"expected all ops to be 'insert' (WALK-visible), got: {set(o.get('op') for o in ops)}"
+    )
+    b64s = [op.get("gate_vector_b64", "") for op in ops]
+    assert all(b for b in b64s), "all insert ops must carry gate_vector_b64"
