@@ -6,7 +6,7 @@ rate limiting; bridge startup is ~45s (15s load + 30 inserts * 0.35s * 2).
 """
 import pathlib, subprocess, sys, time, textwrap
 import pytest
-pytest.importorskip("uvicorn", reason="uvicorn not in system Python — run via uv run pytest")
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 from github_lql_bridge import _select_subgraph
 
