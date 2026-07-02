@@ -35,7 +35,7 @@ fi
 
 mkdir -p "$OUT_DIR/transcripts"
 n=0
-while IFS= read -r q; do
+while IFS= read -r q || [ -n "$q" ]; do
   [ -z "$q" ] && continue
   n=$((n+1))
   # goose reads OPENAI_BASE_URL/OPENAI_API_KEY (A1 wiring, coding-agent convention)
