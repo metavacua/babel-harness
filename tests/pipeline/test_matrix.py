@@ -5,7 +5,9 @@ is in progress on this machine; see induct.py / run_induction.py)."""
 from __future__ import annotations
 
 import json
+import sys
 
+import scripts.run_matrix as run_matrix_mod
 from scripts.pipeline.matrix import (
     cells_from_certs,
     certified_patches,
@@ -14,6 +16,7 @@ from scripts.pipeline.matrix import (
     patch_prelude,
     peak_rss_mb,
     render_report,
+    run_cells_durably,
     run_chat_cell,
     run_driver_cell,
 )
@@ -137,13 +140,18 @@ def test_cells_from_certs_respects_limit(tmp_path):
 
 # ─── patch-prelude construction ordering ───
 
-def test_certified_patches_filters_uncertified_and_sorts_by_n(tmp_path):
-    # deliberately out of file order, with an uncertified step interleaved,
-    # to prove ordering comes from sorting by n, not file position.
+def test_certified_patches_stops_at_first_uncertified_step_gap_fixture(tmp_path):
+    # Review-flagged hardening gap (finding #3): n=3 fails, n=4 is itself
+    # certified ("ok"). A patch series is a delta chain -- n=4's own checks
+    # passing can never make it safe to include once n=3 has failed, so
+    # certified_patches must stop at n=3, excluding n=4's patch entirely,
+    # same as cells_from_certs already does. The old filter-then-sort
+    # implementation would have silently included n=4 here.
     rows = [
+        _cert_line(1, True, "docs/a.md", "part-of-matter", "matter:m1"),
         _cert_line(2, True, "docs/b.md", "part-of-matter", "matter:m1"),
         _cert_line(3, False, "docs/c.md", "part-of-matter", "matter:m1"),
-        _cert_line(1, True, "docs/a.md", "part-of-matter", "matter:m1"),
+        _cert_line(4, True, "docs/d.md", "part-of-matter", "matter:m1"),
     ]
     cert_path = _write_fixture_certs(tmp_path, rows)
     patches = certified_patches(cert_path)
@@ -278,6 +286,73 @@ def test_peak_rss_mb_reads_real_proc_status_for_self():
 
 # ─── report rendering: chat caveat + attribution table ───
 
+# ─── run_cells_durably: per-cell durability (hardening finding #1) ───
+
+def test_run_cells_durably_writes_cell1_to_disk_before_cell2_raises(tmp_path):
+    # The whole point of durability: if cell 2's runner raises, cell 1's
+    # result must ALREADY be safely on disk (not just buffered in memory),
+    # so an interrupted run at cell 2 doesn't erase cell 1's work. Proven
+    # here by having the raising runner independently re-read the file
+    # from a separate handle, at the moment it is about to raise.
+    results_path = tmp_path / "results.jsonl"
+    cells = [{"id": "c1"}, {"id": "c2"}, {"id": "c3"}]
+    seen_at_c2 = {}
+
+    def runner(cell):
+        if cell["id"] == "c2":
+            seen_at_c2["lines"] = results_path.read_text().splitlines()
+            raise RuntimeError("boom")
+        return {"id": cell["id"], "query_path": "browse", "pass": True,
+                "attribution": "vindex"}
+
+    results = run_cells_durably(cells, runner, results_path, mode="w")
+
+    assert len(seen_at_c2["lines"]) == 1
+    assert json.loads(seen_at_c2["lines"][0])["id"] == "c1"
+
+
+def test_run_cells_durably_records_error_row_and_continues_past_raise(tmp_path):
+    results_path = tmp_path / "results.jsonl"
+    cells = [{"id": "c1"}, {"id": "c2"}, {"id": "c3"}]
+
+    def runner(cell):
+        if cell["id"] == "c2":
+            raise RuntimeError("boom")
+        return {"id": cell["id"], "query_path": "browse", "pass": True,
+                "attribution": "vindex"}
+
+    results = run_cells_durably(cells, runner, results_path, mode="w")
+
+    assert [r["id"] for r in results] == ["c1", "c2", "c3"]
+    assert results[0]["pass"] is True
+    assert results[1] == {"id": "c2", "error": "boom", "pass": False,
+                          "attribution": "error"}
+    assert results[2]["pass"] is True  # cell 3 still ran despite cell 2's raise
+
+    on_disk = [json.loads(l) for l in results_path.read_text().splitlines()]
+    assert [r["id"] for r in on_disk] == ["c1", "c2", "c3"]
+    assert on_disk[1]["attribution"] == "error"
+
+
+def test_run_cells_durably_append_mode_accumulates_across_calls(tmp_path):
+    results_path = tmp_path / "results.jsonl"
+    results_path.write_text("")  # main()'s initial fresh-file truncate
+    run_cells_durably([{"id": "a"}], lambda c: {"id": c["id"], "pass": True},
+                      results_path, mode="a")
+    run_cells_durably([{"id": "b"}], lambda c: {"id": c["id"], "pass": True},
+                      results_path, mode="a")
+    lines = results_path.read_text().splitlines()
+    assert [json.loads(l)["id"] for l in lines] == ["a", "b"]
+
+
+def test_report_renders_error_rows_without_query_path():
+    # a durability-error row (run_cells_durably) has no query_path field --
+    # render_report must not KeyError on it.
+    md = render_report([{"id": "c2", "error": "boom", "pass": False,
+                         "attribution": "error"}])
+    assert "0/1" in md and "c2" in md and "error" in md
+
+
 def test_report_includes_chat_caveat_and_liveness_flip_count():
     md = render_report([
         {"id": "e1:chat", "pass": False, "query_path": "chat", "latency_s": 1.0,
@@ -287,3 +362,109 @@ def test_report_includes_chat_caveat_and_liveness_flip_count():
     ])
     assert "Chat caveat" in md
     assert "1/1" in md  # one liveness flip out of one chat row
+
+
+# ─── run_matrix.py: --mem-mb / --timeout-s flag plumbing (hardening
+# finding #2: RESOURCES) -- mocks/monkeypatch only, no real driver/server ───
+
+def test_resolve_mem_mb_uses_explicit_value_and_skips_autosizing(monkeypatch):
+    called = {"n": 0}
+    monkeypatch.setattr(run_matrix_mod, "mem_available_mb",
+                        lambda: (called.__setitem__("n", called["n"] + 1), 9999)[1])
+    monkeypatch.setattr(run_matrix_mod, "size_mem_mb", lambda avail: avail)
+    assert run_matrix_mod._resolve_mem_mb(1234) == 1234
+    assert called["n"] == 0  # explicit value given -- auto-sizing never runs
+
+
+def test_resolve_mem_mb_autosizes_from_live_memavailable_when_omitted(monkeypatch):
+    monkeypatch.setattr(run_matrix_mod, "mem_available_mb", lambda: 5000)
+    monkeypatch.setattr(run_matrix_mod, "size_mem_mb", lambda avail: avail - 1000)
+    assert run_matrix_mod._resolve_mem_mb(None) == 4000
+
+
+class _FakeDriverCapturingKwargs:
+    def __init__(self, bin_, vindex, **kw):
+        self.kwargs = kw
+
+    def run_script(self, statements):
+        raise AssertionError("no cells configured -- run_script must not be called")
+
+
+class _FakeServerCapturingKwargs:
+    def __init__(self, bin_, vindex, **kw):
+        self.kwargs = kw
+        self.proc = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_main_plumbs_mem_mb_and_timeout_s_into_driver_and_server(tmp_path, monkeypatch):
+    captured = {}
+
+    class RecordingDriver(_FakeDriverCapturingKwargs):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            captured["driver_kwargs"] = self.kwargs
+
+    class RecordingServer(_FakeServerCapturingKwargs):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            captured["server_kwargs"] = self.kwargs
+
+    monkeypatch.setattr(run_matrix_mod, "CliLqlDriver", RecordingDriver)
+    monkeypatch.setattr(run_matrix_mod, "LarqlServer", RecordingServer)
+    # no cells at all -- neither loop body runs, so only construction is
+    # under test here (mocks only, per this task's live-induction-run rule).
+    monkeypatch.setattr(run_matrix_mod, "cells_from_certs", lambda cert_path, limit: [])
+    monkeypatch.setattr(run_matrix_mod, "patch_prelude", lambda cert_path: [])
+
+    artifacts = tmp_path / "artifacts"
+    (artifacts / "induction").mkdir(parents=True)
+    graph = tmp_path / "graph.json"
+    graph.write_text("{}")
+
+    argv = ["run_matrix.py", "--bin", "/bin/true", "--vindex", "/x.vindex",
+            "--graph", str(graph), "--artifacts", str(artifacts),
+            "--mem-mb", "1234", "--timeout-s", "42"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    rc = run_matrix_mod.main()
+
+    assert rc == 0
+    assert captured["driver_kwargs"] == {"mem_mb": 1234, "timeout": 42}
+    assert captured["server_kwargs"] == {"mem_mb": 1234}
+
+
+def test_main_defaults_mem_mb_to_autosized_when_flag_omitted(tmp_path, monkeypatch):
+    captured = {}
+
+    class RecordingDriver(_FakeDriverCapturingKwargs):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            captured["driver_kwargs"] = self.kwargs
+
+    monkeypatch.setattr(run_matrix_mod, "CliLqlDriver", RecordingDriver)
+    monkeypatch.setattr(run_matrix_mod, "LarqlServer", _FakeServerCapturingKwargs)
+    monkeypatch.setattr(run_matrix_mod, "cells_from_certs", lambda cert_path, limit: [])
+    monkeypatch.setattr(run_matrix_mod, "patch_prelude", lambda cert_path: [])
+    monkeypatch.setattr(run_matrix_mod, "mem_available_mb", lambda: 5000)
+    monkeypatch.setattr(run_matrix_mod, "size_mem_mb", lambda avail: avail - 1000)
+
+    artifacts = tmp_path / "artifacts"
+    (artifacts / "induction").mkdir(parents=True)
+    graph = tmp_path / "graph.json"
+    graph.write_text("{}")
+
+    argv = ["run_matrix.py", "--bin", "/bin/true", "--vindex", "/x.vindex",
+            "--graph", str(graph), "--artifacts", str(artifacts)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    rc = run_matrix_mod.main()
+
+    assert rc == 0
+    assert captured["driver_kwargs"]["mem_mb"] == 4000
+    assert captured["driver_kwargs"]["timeout"] == 3600  # documented default
