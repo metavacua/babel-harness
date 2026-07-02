@@ -4,7 +4,7 @@ Build attempt (one-time, documented):
   cd ~/work/larql-canonical/crates/larql-python
   python3 -m venv ~/work/pyenv && ~/work/pyenv/bin/pip install maturin
   ~/work/pyenv/bin/maturin develop --release
-Failure => driver unavailable; recorded as a finding (pyo3 RUSTSEC issues #221 predict this).
+Failure => driver unavailable; recorded as a finding. (2026-07-02 result: build interrupted by session teardown mid-compilation — pyo3 compiled cleanly, so fork issue #221's RUSTSEC prediction was NOT confirmed; see task report and ~/work/artifacts/py-bindings-status.json.)
 """
 from __future__ import annotations
 
