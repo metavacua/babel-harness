@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 from scripts.pipeline.canary import CANARY_PROMPTS
-from scripts.pipeline.induct import run_induction, select_sequence
+from scripts.pipeline.induct import run_induction, select_sequence, size_mem_mb
 from scripts.pipeline.lam import LayerMap
 from scripts.pipeline.lql_session import canonical_prompt
 
@@ -368,3 +368,20 @@ def test_canary_persistent_failure_halts_with_both_readings(tmp_path):
     # in this fake, so restoration legitimately reads False)
     assert halt["restored"] is False
     assert not (tmp_path / "step-0001.vlp").exists()
+
+
+# ── resource-aware cgroup sizing (babel-harness#13 mitigation) ──
+
+def test_size_mem_mb_floor_cap_and_reserve():
+    # scarce host: never below the proven Task 12 envelope
+    assert size_mem_mb(2000) == 2500
+    assert size_mem_mb(3000) == 2500          # 3000 - 1200 < floor
+    # mid: available minus host reserve
+    assert size_mem_mb(4200) == 3000
+    # plentiful: capped
+    assert size_mem_mb(10000) == 3400
+
+
+def test_size_mem_mb_monotonic_nondecreasing():
+    vals = [size_mem_mb(a) for a in range(1000, 12000, 250)]
+    assert vals == sorted(vals)

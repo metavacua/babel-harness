@@ -77,6 +77,27 @@ def select_sequence(edges: list[dict], depths: dict, n_max: int) -> list[dict]:
     return ranked[:n_max]
 
 
+# ── resource-aware cgroup sizing (babel-harness#13) ──
+MEM_FLOOR_MB = 2500      # the Task 12 proven envelope -- never go below
+MEM_CAP_MB = 3400        # never take more than this even on a roomy host
+MEM_RESERVE_MB = 1200    # leave this much MemAvailable to the rest of the host
+
+
+def size_mem_mb(mem_available_mb: int,
+                floor: int = MEM_FLOOR_MB, cap: int = MEM_CAP_MB,
+                reserve: int = MEM_RESERVE_MB) -> int:
+    """Size the per-session cgroup from live MemAvailable.
+
+    Motivation (measured live, babel-harness#13): verify sessions peak at
+    1.84-2.03 GB RSS and GROW with n; under a flat 2500 MB cgroup the
+    kernel reclaims the mmapped weight pages once headroom thins, and the
+    next forward pass re-faults them from disk -- single INFERs ballooned
+    from 0.3-22 s to 76-590 s, and run 1's step-7 verify session blew the
+    900 s subprocess timeout. Purely a containment change: the cgroup
+    bounds resources, never semantics."""
+    return max(floor, min(cap, mem_available_mb - reserve))
+
+
 def _gen_record(step_n: int, edge: dict, block: str) -> dict:
     """Judge one canonical-template INFER block against its edge.
 

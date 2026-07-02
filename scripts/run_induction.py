@@ -31,9 +31,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.pipeline.dag import depths as dag_depths          # noqa: E402
-from scripts.pipeline.induct import run_induction, select_sequence  # noqa: E402
+from scripts.pipeline.induct import (                          # noqa: E402
+    run_induction, select_sequence, size_mem_mb,
+)
 from scripts.pipeline.lam import LayerMap                      # noqa: E402
 from scripts.pipeline.lql_driver import CliLqlDriver           # noqa: E402
+
+
+def _mem_available_mb() -> int:
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) // 1024
+    return 0
 
 
 def main() -> int:
@@ -44,16 +53,26 @@ def main() -> int:
     ap.add_argument("--artifacts", type=Path, required=True)
     ap.add_argument("--n-max", type=int, default=64)
     ap.add_argument("--budget-s", type=int, default=10800)
+    # babel-harness#13: resource-aware containment. --mem-mb 0 = auto-size
+    # the session cgroup from live MemAvailable (floor = the proven 2500).
+    # Run 1 halted at step 7 on the 900 s default subprocess timeout while
+    # the cgroup reclaimed the mmapped weights; the timeout bounds
+    # containment, not semantics, so it is configurable and defaults higher.
+    ap.add_argument("--mem-mb", type=int, default=0)
+    ap.add_argument("--timeout-s", type=int, default=3600)
     args = ap.parse_args()
 
+    mem_mb = args.mem_mb if args.mem_mb > 0 else size_mem_mb(_mem_available_mb())
     cal = json.loads((args.artifacts / "calibration.json").read_text())
     graph = json.loads(args.graph.read_text())
     d = dag_depths(graph["edges"])
     lm = LayerMap(cal["k_lo"], cal["k_hi"], d)
     seq = select_sequence(graph["edges"], d, args.n_max)
-    drv = CliLqlDriver(args.bin, args.vindex)
+    drv = CliLqlDriver(args.bin, args.vindex, mem_mb=mem_mb,
+                       timeout=args.timeout_s)
     print(json.dumps({"sequence_len": len(seq), "mode": cal["mode"],
                       "insert_layer": cal["k_hi"] - 1,
+                      "mem_mb": mem_mb, "timeout_s": args.timeout_s,
                       "first_edges": seq[:3]}, indent=2), flush=True)
     rep = run_induction(drv, lm, seq, cal, args.artifacts / "induction",
                         budget_s=args.budget_s, depths=d)
