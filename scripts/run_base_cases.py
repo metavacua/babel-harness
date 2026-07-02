@@ -48,13 +48,12 @@ then separately `d.describe(...)` / `d.infer(...)` / `d.remove_patch(...)`,
 each its own subprocess) can never observe the inserted edge and would
 silently report every base case as failed for an INTERFACE reason, not a
 model-behaviour reason. This script instead composes each verification
-phase as ONE multi-statement LQL script executed in a single `_repl()`
-call (via run_script()), issuing `APPLY PATCH` to re-load the
-already-saved .vlp into that fresh session. `_repl` is CliLqlDriver's
-private low-level method; the current public interface has no
-multi-statement-session primitive, and lql_driver.py is out of scope for
-this task (not on the touch-list) -- adapting around that reality here is
-exactly what hard-fact #1 asks for.
+phase as ONE multi-statement LQL script executed as a single session,
+issuing `APPLY PATCH` to re-load the already-saved .vlp into that fresh
+session. Originally that used CliLqlDriver's private `_repl` via a local
+helper (lql_driver.py was out of scope for Task 12); Task 13 promoted it
+to the public CliLqlDriver.run_script() and moved the shared parsing
+helpers to scripts/pipeline/lql_session.py.
 
 Usage: python3 scripts/run_base_cases.py --bin $LARQL_BIN --vindex <path> --out ~/work/artifacts
 """
@@ -73,7 +72,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.pipeline.canary import CANARY_PROMPTS, conservation_ok        # noqa: E402
 from scripts.pipeline.lql_driver import (                                  # noqa: E402
-    CliLqlDriver, StepResult, parse_describe, parse_infer,
+    CliLqlDriver, StepResult, parse_describe,
+)
+from scripts.pipeline.lql_session import (                                 # noqa: E402
+    CANARY_TOP, chunk_infer_rows, extract_ms_lines, measure_canaries_batch,
 )
 from scripts.pipeline.py_driver import py_bindings_available               # noqa: E402
 
@@ -107,14 +109,12 @@ BASE_EDGES = {
 RETRIEVAL_THRESHOLD = 0.30   # frozen: min top-k probability for gen_hit to count
 CANARY_TOL = 0.15            # frozen: max allowed top-1 probability drop (post-insert)
 RESTORE_TOL = 0.05           # tighter tolerance for post-REMOVE restoration
-CANARY_TOP = 3                # INFER TOP used uniformly for all canary measurements
 
 # Line-anchored error detector, deliberately duplicated from lql_driver's
 # private _ERROR_LINE (same source: crates/larql-cli eprintln!("Error: {e}")
 # is a line-anchored "Error:" prefix) -- lql_driver.py is out of scope for
 # this task so its private regex is not imported.
 _ERROR_LINE = re.compile(r"^Error:")
-_MS_LINE = re.compile(r"^\s*(\d+(?:\.\d+)?)ms\s*$")
 
 
 def _q(s: str) -> str:
@@ -135,81 +135,12 @@ def _assert_edges_in_graph(graph_path: Path, edges: dict) -> None:
             f"BASE_EDGES entries not found in {graph_path}: {missing}")
 
 
-def run_script(drv: CliLqlDriver, statements: list[str]) -> tuple[str, float]:
-    """Execute one or more LQL statements as a SINGLE repl session (one
-    subprocess, one mmap of the vindex). Returns (raw_output,
-    latency_seconds). Each statement must already end in ';'; a leading
-    `USE "<vindex>";` is prepended automatically. See module docstring F2/F3
-    for why this composition (rather than separate CliLqlDriver calls) is
-    required."""
-    script = f'USE {_q(drv.vindex)};\n' + "\n".join(statements) + "\n"
-    t0 = time.monotonic()
-    raw = drv._repl(script)          # noqa: SLF001 -- see module docstring
-    return raw, time.monotonic() - t0
-
-
-_INFER_HEADER = "Predictions (walk FFN):"
-
-
-def split_infer_blocks(raw: str) -> list[str]:
-    """Split raw multi-statement REPL output into one substring per INFER
-    call, on its deterministic header (crates/larql-lql/src/executor/query/
-    infer.rs pushes exactly one "Predictions (walk FFN):" line per INFER,
-    before its numbered rows). Positional/count-based chunking was tried
-    first and is UNSAFE: a rank >=2 row can be an empty/whitespace-only
-    token (confirmed live -- see preflight-canary-batch.log, "Water is made
-    of hydrogen and" TOP 3 rank 2 is `                     (0.40%)`, an
-    empty token that `_INFER_LINE`'s `(\\S+)` group does not match, so
-    parse_infer silently drops that ONE row and a TOP-3 call yields only 2
-    parsed rows). Header-splitting sidesteps row-count entirely."""
-    idxs = [m.start() for m in re.finditer(re.escape(_INFER_HEADER), raw)]
-    if not idxs:
-        return []
-    idxs.append(len(raw))
-    return [raw[idxs[i]:idxs[i + 1]] for i in range(len(idxs) - 1)]
-
-
-def chunk_infer_rows(raw: str, n_statements: int) -> list[list[tuple[str, float]]]:
-    """Parse one row-list per INFER statement issued in the script that
-    produced `raw`, by header-splitting (see split_infer_blocks) rather than
-    assuming each statement returns exactly its requested TOP row count.
-    Raises loudly if the number of "Predictions (walk FFN):" headers found
-    does not match the number of INFER statements actually issued (e.g. a
-    statement errored before producing output) instead of silently
-    misattributing rows to the wrong prompt."""
-    blocks = split_infer_blocks(raw)
-    if len(blocks) != n_statements:
-        raise ValueError(
-            f"chunk_infer_rows: expected {n_statements} INFER blocks, "
-            f"got {len(blocks)}; raw tail: {raw[-300:]!r}")
-    return [parse_infer(b) for b in blocks]
-
-
-def extract_ms_lines(raw: str) -> list[float]:
-    """In-tool-reported per-statement latency ("  Nms" lines emitted by
-    INFER; see crates/larql-lql/src/executor/query/infer.rs). Supplementary
-    to the Python-side wall-clock latency recorded around each subprocess
-    call -- narrows down how much of a call's latency is LQL compute vs.
-    process/mmap overhead."""
-    return [float(m.group(1)) for line in raw.splitlines()
-            if (m := _MS_LINE.match(line))]
-
-
-def measure_canaries_batch(drv: CliLqlDriver, prelude: list[str] | None = None
-                            ) -> tuple[dict[str, tuple[str, float]], str, float]:
-    """Measure all CANARY_PROMPTS in ONE subprocess call. `prelude`
-    statements (e.g. APPLY PATCH / REMOVE PATCH) run first, in the same
-    session, before the INFER battery -- so the canary measurement reflects
-    whatever patch state the prelude establishes."""
-    stmts = list(prelude or [])
-    for prompt, _expected in CANARY_PROMPTS:
-        stmts.append(f'INFER {_q(prompt)} TOP {CANARY_TOP};')
-    raw, latency = run_script(drv, stmts)
-    groups = chunk_infer_rows(raw, len(CANARY_PROMPTS))
-    out = {}
-    for (prompt, _expected), preds in zip(CANARY_PROMPTS, groups):
-        out[prompt] = preds[0] if preds else ("", 0.0)
-    return out, raw, latency
+# run_script / split_infer_blocks / chunk_infer_rows / extract_ms_lines /
+# measure_canaries_batch lived here originally (validated live in the Task
+# 12 run); they are now shared code -- run_script is the public
+# CliLqlDriver.run_script() session primitive, the rest live in
+# scripts/pipeline/lql_session.py (Task 13 adaptation A, closing the Task 12
+# review's untested-helpers finding).
 
 
 def browse_hit_check(desc: list[tuple[str, str, str]], target: str) -> bool:
@@ -277,7 +208,7 @@ def grammar_self_check(drv: CliLqlDriver, out_dir: Path, insert_layer: int
     infer_ok = len(infer_preds) >= 1
 
     patch = str(out_dir / "self-check.vlp")
-    insert_raw, insert_latency = run_script(drv, [
+    insert_raw, insert_latency = drv.run_script([
         f'BEGIN PATCH {_q(patch)};',
         f'INSERT INTO EDGES (entity, relation, target) '
         f'VALUES ({_q(_SELF_CHECK_ENTITY)}, {_q(_SELF_CHECK_RELATION)}, '
@@ -290,7 +221,7 @@ def grammar_self_check(drv: CliLqlDriver, out_dir: Path, insert_layer: int
     describe_ok = (not insert_error) and any(
         t == _SELF_CHECK_TARGET for (_e, _l, t) in desc_rows)
 
-    remove_raw, remove_latency = run_script(drv, [
+    remove_raw, remove_latency = drv.run_script([
         f'APPLY PATCH {_q(patch)};',
         f'REMOVE PATCH {_q(patch)};',
     ])
@@ -502,7 +433,7 @@ def main() -> int:
                         continue
 
                     # -- post-insert verification: APPLY + DESCRIBE + INFER(gen), one session --
-                    verify_raw, verify_latency = run_script(d, [
+                    verify_raw, verify_latency = d.run_script([
                         f'APPLY PATCH {_q(patch)};',
                         f'DESCRIBE {_q(edge["s"])};',
                         f'INFER {_q(gen_prompt)} TOP 5;',
@@ -540,7 +471,7 @@ def main() -> int:
                     # below is therefore measured with the patch still applied in
                     # this session -- a conservative reading (conservation must
                     # hold even WITH the patch loaded, at the tighter tolerance).
-                    remove_raw, remove_latency = run_script(d, [
+                    remove_raw, remove_latency = d.run_script([
                         f'APPLY PATCH {_q(patch)};',
                         f'REMOVE PATCH {_q(patch)};',
                         f'DESCRIBE {_q(edge["s"])};',

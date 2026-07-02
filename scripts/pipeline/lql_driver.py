@@ -10,6 +10,7 @@ if canonical output format differs, fix the parsers HERE (single point).
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 
 from scripts.pipeline.contained import run_serial
@@ -114,6 +115,24 @@ class CliLqlDriver:
         r = run_serial([self.bin, "repl"], timeout=self.timeout,
                        mem_mb=self.mem_mb, cpus=self.cpus, input=script)
         return (r.stdout or "") + "\n" + (r.stderr or "")
+
+    def run_script(self, statements: list[str]) -> tuple[str, float]:
+        """Execute one or more LQL statements as a SINGLE repl session (one
+        subprocess, one mmap of the vindex). Returns (raw_output,
+        wall_latency_seconds). Each statement must already end in ';'; a
+        leading `USE "<vindex>";` is prepended automatically.
+
+        This is the multi-statement session primitive that findings F2/F3
+        (Task 12 preflight) make necessary: patches are session-scoped, so
+        any verification of a saved patch must APPLY it in the same session
+        that reads it -- separate describe()/infer() calls can never observe
+        a saved patch. Promoted from run_base_cases.py's module-level helper
+        per the Task 12 review.
+        """
+        script = f"USE {_q(self.vindex)};\n" + "\n".join(statements) + "\n"
+        t0 = time.monotonic()
+        raw = self._repl(script)
+        return raw, time.monotonic() - t0
 
     def insert_step(self, edge: dict, layer: int, mode: str,
                     alpha: float | None, patch_path: str) -> StepResult:

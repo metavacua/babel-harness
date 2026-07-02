@@ -1,0 +1,126 @@
+[0;34m·[0m session shells:
+  claude code: 1 shell(s)  [current=shell-1]
+  shell-1   ~/legal-theory                 idle [me]
+
+Running scope as unit: run-r88507d7a6b25488594045d5e4a6f3d3e.scope
+
+   ╦   ╔═╗ ╦═╗ ╔═╗ ╦
+   ║   ╠═╣ ╠╦╝ ║═╬╗║
+   ╩═╝ ╩ ╩ ╩╚═ ╚═╝╚╩═╝
+   Lazarus Query Language v0.1
+
+Using: /home/metavacua/work/vindexes/smollm2-360m-canonical.vindex (32 layers, 81.9K features, model: /home/metavacua/smollm2-360m-src)
+Applied: /home/metavacua/work/artifacts/bc-single-KNN-cli-lql.vlp (1 operations: 1 inserts, 0 updates, 0 deletes)
+Predictions (walk FFN):
+   1. END                  (100.00%, source=knn_override/post_logits, cos=0.82, L24, model_top1= a (8.43%))
+   2.  a                   (8.43%)
+   3.  the                 (6.75%)
+   4.  not                 (4.99%)
+   5.  an                  (1.76%)
+  16161ms
+  note: KNN override is a post-logits retrieval sidecar, not an FFN/residual edit.
+
+Inference trace (features that fired with attention):
+  L 0:  F1307  gate=-3.5  → "               [", C, (]
+  L 0:  F1525  gate=-3.5  → aspberries      [aspberries, emetery, uggage]
+  L 0:  F2086  gate=+2.3  → is              [is, and, (]
+  L 1:  F1404  gate=-2.2  → more            [more, notice, c]
+  L 1:  F412   gate=-1.8  → aughed          [aughed, stuffs, jango]
+  L 1:  F396   gate=-1.6  → astrous         [astrous, cephal, arvation]
+  L 2:  F468   gate=-3.9  → KeyNot          [KeyNot, numerable, sofar]
+  L 2:  F668   gate=-2.3  → omegran         [omegran, Institutions, ilantro]
+  L 2:  F1498  gate=-2.0  → URRENT          [URRENT, pun, ь]
+  L 3:  F962   gate=-10.9  → ilantro         [ilantro, emeteries, emetery]
+  L 3:  F224   gate=-2.9  → erately         [erately, aws, "—]
+  L 3:  F1467  gate=-2.8  → bsites          [bsites, theless, ')(]
+  L 4:  F240   gate=-2.4  → P               [P, ,, (]
+  L 4:  F1066  gate=-2.2  → grocer          [grocer, emetery, rofen]
+  L 4:  F1111  gate=-2.2  → forgettable     [forgettable, endment, pinephrine]
+  L 5:  F181   gate=-2.2  → mete            [mete, HB, “]
+  L 5:  F66    gate=+2.0  → aphrag          [aphrag, ums, pee]
+  L 5:  F2064  gate=-2.0  → onsai           [onsai, outheastern, olybden]
+  L 6:  F1262  gate=-2.3  → emeteries       [emeteries, ediatr, uisines]
+  L 6:  F1316  gate=-2.0  → olkien          [olkien, olicies, ISTORY]
+  L 6:  F2522  gate=-2.0  → un              [un, ", “]
+  L 7:  F415   gate=-2.6  → tis             [tis, FTWARE, ομαι]
+  L 7:  F2123  gate=-2.5  → phans           [phans, vironments, iagnosed]
+  L 7:  F1699  gate=+2.3  → Tribune         [Tribune, entieth, yin]
+  L 8:  F282   gate=-3.7  → firehose        [firehose, reponame, queeze]
+  L 8:  F2150  gate=-3.6  → log             [log, logs, andel]
+  L 8:  F1494  gate=-3.6  → ?](             [?](, heid, ifflin]
+  L 9:  F2423  gate=-3.3  → numerable       [numerable, Intf, postdocs]
+  L 9:  F1135  gate=-3.1  → verages         [verages, caterpill, tage]
+  L 9:  F129   gate=-2.9  → ogen            [ogen, ediatrics, iriam]
+  L10:  F666   gate=-2.3  → ap              [ap, sem, sources]
+  L10:  F1147  gate=-2.1  → ing             [ing, points, asionally]
+  L10:  F2077  gate=-1.9  → conciliation    [conciliation, opyright, ifflin]
+  L11:  F2066  gate=-2.8  → ️               [️, █, ishments]
+  L11:  F1684  gate=+2.7  → QtWidgets       [QtWidgets, oosevelt, orgetown]
+  L11:  F307   gate=+2.2  → metavar         [metavar, ongh, nargs]
+  L12:  F2082  gate=-3.0  → s               [s, _, a]
+  L12:  F543   gate=-2.5  → outwe           [outwe, reponame, 度]
+  L12:  F1079  gate=-2.2  → setLevel        [setLevel, emetery, :/]
+  L13:  F1318  gate=-7.1  → (               [(, ", m]
+  L13:  F1736  gate=-4.5  → ChannelType     [ChannelType, Pregn, istically]
+  L13:  F1709  gate=-3.8  → suck            [suck, Counter, counter]
+  L14:  F2441  gate=-2.9  → S               [S, H, -]
+  L14:  F663   gate=+2.9  → emetery         [emetery, ietzsche, apagos]
+  L14:  F108   gate=-2.6  → all             [all, order, file]
+  L15:  F2431  gate=-3.4  → termedi         [termedi, stuffs, cipline]
+  L15:  F282   gate=-3.3  → than            [than, than, Than]
+  L15:  F1575  gate=-2.8  → urface          [urface, hift, ––]
+  L16:  F1370  gate=-4.3  → currently       [currently, now, ']
+  L16:  F1661  gate=-4.0  → omegran         [omegran, odeficiency, uggage]
+  L16:  F206   gate=-3.7  → contra          [contra, persons, persons]
+  L17:  F2281  gate=-4.6  → """,            [""",, iber, terol]
+  L17:  F985   gate=-4.5  → xtap            [xtap, avian, iven]
+  L17:  F195   gate=-4.5  → __()            [__(), ]]:, ]||]
+  L18:  F1811  gate=-3.2  → tenance         [tenance, essee, aters]
+  L18:  F1457  gate=-3.0  → cels            [cels, ioned, ptious]
+  L18:  F1993  gate=-3.0  → ixt             [ixt, Incorpor, esp]
+  L19:  F2270  gate=-3.5  → ays             [ays, pull, ).__]
+  L19:  F851   gate=-3.4  → eering          [eering, μm, -%]
+  L19:  F505   gate=-3.2  → ulpt            [ulpt, lux, ulum]
+  L20:  F1433  gate=-3.9  → weight          [weight, uprofen, bar]
+  L20:  F2061  gate=-3.1  → ineteen         [ineteen, lectric, ussis]
+  L20:  F444   gate=-2.8  → ellect          [ellect, abilia, us]
+  L21:  F1313  gate=+5.1  → done            [done, supposed, seen]
+  L21:  F1487  gate=-3.5  → forgettable     [forgettable, elage, olkien]
+  L21:  F116   gate=+3.4  → atis            [atis, noting, ante]
+  L22:  F1023  gate=-4.1  → efficacy        [efficacy, MetaInfo, comings]
+  L22:  F733   gate=-3.9  → aphyloc         [aphyloc, olkien, ylon]
+  L22:  F2017  gate=-3.8  → -               [-, unken, bell]
+  L23:  F897   gate=+5.1  → uckingham       [uckingham, olation, feres]
+  L23:  F1223  gate=-3.8  → hers            [hers, ethoven, ditionally]
+  L23:  F2298  gate=-3.7  → human           [human, Human, people]
+  L24:  F1430  gate=+3.9  → (               [(, ", C]
+  L24:  F291   gate=+3.4  → Â               [Â, â, ``]
+  L24:  F429   gate=-3.4  → noqa            [noqa, pylint, Wayback]
+  L25:  F245   gate=-4.7  → tempfile        [tempfile, enfranch, iriam]
+  L25:  F1867  gate=+4.2  → (               [(, a, t]
+  L25:  F1095  gate=+4.2  → been            [been, being, be]
+  L26:  F914   gate=+5.1  → (               [(, ", a]
+  L26:  F1077  gate=-5.1  → failed          [failed, which, long]
+  L26:  F2061  gate=+4.3  → can             [can, were, didn]
+  L27:  F1741  gate=+6.6  → ilantro         [ilantro, emeteries, uggage]
+  L27:  F1535  gate=+5.2  → ecost           [ecost, emetery, jango]
+  L27:  F813   gate=+5.1  → ready           [ready, errals, Ready]
+  L28:  F1255  gate=+6.2  → (               [(, ", d]
+  L28:  F759   gate=+4.7  → h               [h, l, mod]
+  L28:  F256   gate=-4.2  → who             [who, who, Who]
+  L29:  F678   gate=+5.6  → S               [S, s, d]
+  L29:  F1322  gate=+5.5  → "               [", m, (]
+  L29:  F718   gate=+5.3  → code            [code, programmer, code]
+  L30:  F1127  gate=+10.3  → pancreat        [pancreat, antioxid, comings]
+  L30:  F25    gate=+9.9  → m               [m, f, w]
+  L30:  F1402  gate=+9.7  → interspers      [interspers, defic, enric]
+  L31:  F2060  gate=+20.4  → ilantro         [ilantro, emeteries, olkien]
+  L31:  F2496  gate=+17.7  → "               [", S, “]
+  L31:  F446   gate=+17.5  → (               [(, a, ,]
+Goodbye.
+[0;34m·[0m isolation: cgroup(mem=2500MB,cpus=6/8,weight=20)
+[0;34m·[0m threads:   RAYON_NUM_THREADS=6  TOKIO_WORKER_THREADS=6
+[0;34m·[0m log:       /home/metavacua/.larql-probe/20260702-104753-anomalyB-v2.jsonl
+
+[0;32m✓[0m success  peak RSS 1731 MB / limit 2500 MB  [29617ms]
+[0;34m·[0m logs: /home/metavacua/.larql-probe/20260702-104753-anomalyB-v2.jsonl  meta: /home/metavacua/.larql-probe/20260702-104753-anomalyB-v2.meta.json
