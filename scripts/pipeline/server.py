@@ -62,7 +62,9 @@ class LarqlServer:
             if self.alive():
                 return
             if self.proc.poll() is not None:
-                raise RuntimeError(f"server exited early: {self.proc.returncode}")
+                rc = self.proc.returncode
+                self.stop()   # reap any surviving process-group members before raising
+                raise RuntimeError(f"server exited early: {rc}")
             time.sleep(2)
         self.stop()
         raise TimeoutError(f"server not ready in {wait_s}s")
