@@ -33,3 +33,9 @@ def test_meta_roundtrip():
 def test_attribute_nodes_use_default_layer():
     lm = LayerMap(k_lo=14, k_hi=27, depths=DEPTHS)
     assert lm.layer(_e("cite:somewhere")) == lm.default_layer() == 26
+
+def test_from_meta_rejects_unknown_formula():
+    import pytest
+    with pytest.raises(ValueError):
+        LayerMap.from_meta({"formula": "affine-v1", "k_lo": 14, "k_hi": 27,
+                            "max_depth": 3}, {})
