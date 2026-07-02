@@ -16,20 +16,24 @@ _CATEGORY = {
 
 
 def path_derived_edges(relpaths: list[str]) -> list[dict]:
-    edges: set[tuple] = set()
+    edges: dict[tuple, str] = {}
     for p in sorted(relpaths):
-        # directory containment chain
+        # directory containment chain. The same (parent, contains, child)
+        # triple is implied by every file beneath `child`; provenance is
+        # keyed off `child` itself (not the iterated file) so the edge is
+        # naturally deduplicated regardless of which/how-many files below it
+        # are present, and stays independent of input order.
         parts = p.split("/")
         for i in range(1, len(parts)):
             parent = "/".join(parts[:i])
             child = "/".join(parts[:i + 1])
-            edges.add((parent, "contains", child, p))
+            edges.setdefault((parent, "contains", child), child)
         m = _MATTER.match(p)
         if m:
-            edges.add((p, "part-of-matter", f"matter:{m.group(1)}", p))
+            edges.setdefault((p, "part-of-matter", f"matter:{m.group(1)}"), p)
         for prefix, cat in _CATEGORY.items():
             if p.startswith(prefix + "/") or posixpath.dirname(p) == prefix:
-                edges.add((p, "in-category", cat, p))
+                edges.setdefault((p, "in-category", cat), p)
                 break
     return [{"s": s, "r": r, "o": o, "c": 1.0, "prov": f"{prov}:0"}
-            for s, r, o, prov in sorted(edges)]
+            for (s, r, o), prov in sorted(edges.items())]
