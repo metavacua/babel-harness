@@ -7,6 +7,10 @@ Files: docs/**
 Copyright: 2026 metavacua
 License: CC-BY-SA-4.0
 
+Files: README.md AGENTS.md CLAUDE.md
+Copyright: 2026 metavacua
+License: CC-BY-SA-4.0
+
 Files: bin/** scripts/** src/**
 Copyright: 2026 metavacua
 License: AGPL-3.0-or-later
