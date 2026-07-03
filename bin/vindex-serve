@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# vindex-serve — the single, first-class server-lifecycle command for a
+# babel-harness model server (larql serve OR the patched/ablation chat_shim).
+#
+# Why this exists: hand-juggling `larql serve` / `scripts/pipeline/chat_shim.py`
+# processes directly (no pidfile, no discover-before-launch, ad-hoc manual
+# process termination) caused severe process-management thrash in a live
+# session (see ~/docs/2026-07-02-babel-harness-operability-ux.md and
+# AGENTS.md's "Operational laws"). This script reuses bin/coding-agent's
+# lifecycle discipline (_check_larql discover-before-launch;
+# _start_larql_server's explicit PID capture + health-poll) as ONE entry
+# point that both humans and LLM agents call instead of shelling out to the
+# backends directly.
+#
+# HARD RULE (never violated in this file): no name/pattern-based process
+# discovery or termination anywhere. The pidfile's explicitly-captured PID
+# is the ONLY handle used to find or stop a server — see AGENTS.md's "never
+# terminate by a pattern that can match your own command line" law (a
+# name-pattern termination of chat_shim self-terminated the invoking shell
+# in the incident that motivated this script).
+#
+# Usage:
+#   vindex-serve {start|status|stop|restart} [OPTIONS]
+#
+# Options:
+#   --vindex PATH        vindex directory/file to serve (required for start)
+#   --patches-dir DIR    certified step-*.vlp overlay dir; implies chat-shim
+#                        backend, patched
+#   --no-patches         chat-shim backend, ablation (never APPLY any patch)
+#   --backend MODE       auto|shim|larql (default: auto)
+#                        auto = shim if --patches-dir/--no-patches given, OR
+#                        the vindex's index.json has dtype=f16/quant=none
+#                        (larql serve panics on those — larql-to-sparql#253);
+#                        else larql serve.
+#   --port N             default: ${LARQL_PORT:-8282}
+#   --bin PATH           larql binary (default: the canonical checkout build)
+#   --mem-mb MB          containment memory ceiling (default: 2500)
+#   --cpus N             containment CPU count for the larql-serve backend
+#                        (default: 6; no effect on the shim backend, which
+#                        has no --cpus knob of its own — see below)
+#   -h, --help           show this help
+#
+# Env seams:
+#   VINDEX_SERVE_PIDDIR / VINDEX_SERVE_LOGDIR — default: $HOME/.cache/babel-harness
+#   VINDEX_SERVE_BACKEND_CMD — TEST SEAM ONLY: word-split command prefix that
+#       replaces the real shim/larql launch entirely (bypasses larql-probe
+#       containment too, since it never loads a model) — `--port $PORT` is
+#       appended automatically. Used by tests/test-vindex-serve.bash to run a
+#       mock HTTP server in place of chat_shim.py / larql serve.
+#   LARQL_START_TIMEOUT — health-poll deadline in seconds (default: 40)
+#   LARQL_BIN — overrides the --bin default
+#   LARQL_PORT — overrides the --port default
+#
+# Containment (AGENTS.md "every model-loading command goes through
+# larql-probe safe"): the larql-serve backend IS itself the model-loading
+# command (larql serve pre-loads weights at startup), so its launch is
+# wrapped in `larql-probe safe --mem --cpus`. The shim backend is different:
+# scripts/pipeline/chat_shim.py never loads a model at startup (it just
+# binds a socket); the actual model-loading command is the `larql repl` it
+# opens PER REQUEST via CliLqlDriver -> contained.py's run_serial, which
+# ALREADY wraps that in `larql-probe safe` internally (contained.py's own
+# HARD POLICY). Wrapping the outer, long-lived chat_shim.py process in a
+# SECOND, outer larql-probe scope would be double containment for no
+# benefit, so — matching scripts/run_goose_demo.sh's established, working
+# precedent in this exact repo — the shim backend is launched directly,
+# uncontained at the outer-process level, with --mem-mb forwarded so its
+# own per-request containment is still sized correctly.
+#
+# KNOWN LIMITATION (documented, not silently papered over): `larql-probe
+# safe`'s cgroup path runs the wrapped command as `sudo systemd-run --scope
+# -- CMD`, synchronously, WITHOUT exec'ing into it — confirmed empirically
+# (bin/vindex-serve's own dev session) that sending SIGTERM to the `$!` pid
+# captured right after `larql-probe safe ... &` kills only the larql-probe
+# wrapper's own process chain, leaving the actual payload running, orphaned,
+# still holding the port. `cmd_stop` mitigates this for the larql-serve
+# backend by ALSO parsing "Running scope as unit: NAME" (systemd-run's own
+# stderr line, captured in the backend's log) and issuing `sudo -n systemctl
+# stop NAME` — verified empirically to reliably tear down the scope and its
+# payload. This is belt-and-braces, not a guarantee: if `larql-probe safe`
+# ever falls back to its non-sudo ulimit path (no scope unit to target),
+# there is no equivalent recovery. Either way, `cmd_stop` verifies the port
+# is actually released before claiming success — it never silently reports
+# "stopped" while something is still listening.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VINDEX_SERVE_PIDDIR="${VINDEX_SERVE_PIDDIR:-$HOME/.cache/babel-harness}"
+VINDEX_SERVE_LOGDIR="${VINDEX_SERVE_LOGDIR:-$HOME/.cache/babel-harness}"
+LARQL_START_TIMEOUT="${LARQL_START_TIMEOUT:-40}"
+LARQL_PROBE_BIN="${LARQL_PROBE_BIN:-larql-probe}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+CHAT_SHIM_PATH="${CHAT_SHIM_PATH:-$REPO_ROOT/scripts/pipeline/chat_shim.py}"
+
+usage() {
+  sed -n '23,54p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+# -- defaults (overridable by flags) ---------------------------------------
+ACTION=""
+VINDEX=""
+PATCHES_DIR=""
+NO_PATCHES="0"
+BACKEND_FLAG="auto"
+PORT="${LARQL_PORT:-8282}"
+BIN="${LARQL_BIN:-$HOME/work/larql-canonical/target/release/larql}"
+MEM_MB="${VINDEX_SERVE_MEM_MB:-2500}"
+CPUS="${VINDEX_SERVE_CPUS:-6}"
+
+if [ $# -eq 0 ]; then
+  usage
+  exit 2
+fi
+ACTION="$1"; shift
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vindex) VINDEX="$2"; shift 2 ;;
+    --patches-dir) PATCHES_DIR="$2"; shift 2 ;;
+    --no-patches) NO_PATCHES="1"; shift ;;
+    --backend) BACKEND_FLAG="$2"; shift 2 ;;
+    --port) PORT="$2"; shift 2 ;;
+    --bin) BIN="$2"; shift 2 ;;
+    --mem-mb) MEM_MB="$2"; shift 2 ;;
+    --cpus) CPUS="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "vindex-serve: unknown option: $1" >&2; usage; exit 2 ;;
+  esac
+done
+
+case "$ACTION" in
+  start|status|stop|restart) ;;
+  -h|--help) usage; exit 0 ;;
+  *) echo "vindex-serve: unknown action: $ACTION" >&2; usage; exit 2 ;;
+esac
+
+case "$BACKEND_FLAG" in
+  auto|shim|larql) ;;
+  *) echo "vindex-serve: invalid --backend: $BACKEND_FLAG (want auto|shim|larql)" >&2; exit 2 ;;
+esac
+
+if [ "$BACKEND_FLAG" = "larql" ] && { [ -n "$PATCHES_DIR" ] || [ "$NO_PATCHES" = "1" ]; }; then
+  echo "vindex-serve: --patches-dir/--no-patches require backend=shim (or auto), not --backend larql" >&2
+  exit 2
+fi
+
+mkdir -p "$VINDEX_SERVE_PIDDIR" "$VINDEX_SERVE_LOGDIR"
+
+_pidfile_path() { echo "$VINDEX_SERVE_PIDDIR/vindex-serve-$PORT.pid"; }
+_logfile_path() { echo "$VINDEX_SERVE_LOGDIR/vindex-serve-$PORT.log"; }
+
+# Populates globals PID / BACKEND_STORED / VINDEX_STORED / PATCHED_STORED.
+# Returns 1 (and leaves globals empty) if the pidfile is absent/malformed.
+_read_pidfile() {
+  local pidfile="$1"
+  PID=""; BACKEND_STORED=""; VINDEX_STORED=""; PATCHED_STORED=""
+  [ -f "$pidfile" ] || return 1
+  IFS=$'\t' read -r PID BACKEND_STORED VINDEX_STORED PATCHED_STORED < "$pidfile"
+  [ -n "$PID" ] || return 1
+  return 0
+}
+
+_pid_alive() {
+  kill -0 "$1" 2>/dev/null
+}
+
+_health_ok() {
+  curl -sf --max-time 3 "http://127.0.0.1:${1}/v1/models" > /dev/null 2>&1
+}
+
+# Prints the PID of whatever is listening on $1, empty if nothing is.
+# ss-based (never pattern-kill; this only ever READS the holder's pid to
+# decide whether to refuse, it is never passed to `kill`).
+_port_holder_pid() {
+  ss -tlnp 2>/dev/null | grep -E ":${1}([[:space:]]|\$)" | grep -oP 'pid=\K[0-9]+' | head -n1
+}
+
+# True (exit 0) iff the vindex's index.json says dtype=f16 or quant=none —
+# larql serve panics on either (larql-to-sparql#253), so --backend auto must
+# route these to the chat shim instead.
+_vindex_needs_shim() {
+  local vindex="$1" idx
+  [ -n "$vindex" ] || return 1
+  idx="$vindex/index.json"
+  [ -f "$idx" ] || return 1
+  "$PYTHON_BIN" -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if (d.get("dtype") == "f16" or d.get("quant") == "none") else 1)
+' "$idx"
+}
+
+_resolve_backend() {
+  if [ "$BACKEND_FLAG" = "shim" ] || [ "$BACKEND_FLAG" = "larql" ]; then
+    echo "$BACKEND_FLAG"
+    return 0
+  fi
+  # auto
+  if [ -n "$PATCHES_DIR" ] || [ "$NO_PATCHES" = "1" ]; then
+    echo "shim"
+    return 0
+  fi
+  if _vindex_needs_shim "$VINDEX"; then
+    echo "shim"
+  else
+    echo "larql"
+  fi
+}
+
+_resolve_patched() {
+  local backend="$1"
+  if [ "$backend" = "shim" ] && [ -n "$PATCHES_DIR" ] && [ "$NO_PATCHES" != "1" ]; then
+    echo "true"
+  else
+    echo "false"
+  fi
+}
+
+# Populates global array BACKEND_CMD_ARR with the argv to launch. Only the
+# larql-serve backend is wrapped in larql-probe safe here -- see the
+# "Containment" note in the header comment for why the shim backend is
+# launched directly (it already self-contains per request; double-wrapping
+# it would add nothing but the orphaned-process risk documented under
+# "KNOWN LIMITATION"). VINDEX_SERVE_BACKEND_CMD (test seam) replaces either
+# path entirely.
+_build_backend_cmd() {
+  local backend="$1"
+  BACKEND_CMD_ARR=()
+  if [ -n "${VINDEX_SERVE_BACKEND_CMD:-}" ]; then
+    # shellcheck disable=SC2206 -- intentional word-split seam, same
+    # convention as run_goose_demo.sh's CHAT_SHIM_CMD.
+    BACKEND_CMD_ARR=($VINDEX_SERVE_BACKEND_CMD)
+    BACKEND_CMD_ARR+=(--port "$PORT")
+    return 0
+  fi
+  case "$backend" in
+    shim)
+      BACKEND_CMD_ARR=("$PYTHON_BIN" -u "$CHAT_SHIM_PATH"
+        --bin "$BIN" --vindex "$VINDEX" --port "$PORT" --mem-mb "$MEM_MB")
+      [ -n "$PATCHES_DIR" ] && BACKEND_CMD_ARR+=(--patches-dir "$PATCHES_DIR")
+      [ "$NO_PATCHES" = "1" ] && BACKEND_CMD_ARR+=(--no-patches)
+      ;;
+    larql)
+      BACKEND_CMD_ARR=("$LARQL_PROBE_BIN" safe --mem "$MEM_MB" --cpus "$CPUS" --
+        "$BIN" serve "$VINDEX" --port "$PORT")
+      ;;
+    *)
+      echo "vindex-serve: internal error: unknown backend '$backend'" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# Prints the systemd scope unit name larql-probe's cgroup path created for
+# this backend, if any -- parsed from `systemd-run`'s own "Running scope as
+# unit: NAME" stderr line, which lands in the backend's log (the shim
+# backend and the VINDEX_SERVE_BACKEND_CMD test seam never produce this
+# line, so this is naturally a no-op for them). Empty if not found.
+_scope_unit_from_log() {
+  local logfile="$1"
+  [ -f "$logfile" ] || return 0
+  grep -oP 'Running scope as unit: \K\S+' "$logfile" 2>/dev/null | tail -n1
+}
+
+cmd_start() {
+  if [ -z "$VINDEX" ]; then
+    echo "vindex-serve: --vindex is required for start" >&2
+    return 2
+  fi
+
+  local pidfile logfile
+  pidfile="$(_pidfile_path)"
+  logfile="$(_logfile_path)"
+
+  # 1. Discover-before-launch: something is already alive under our pidfile?
+  # Treat it as idempotent whether or not health has landed yet -- for the
+  # larql-serve backend the pidfile PID is the larql-probe wrapper, which is
+  # alive throughout the (up to LARQL_START_TIMEOUT-second) weight-preload
+  # window before /v1/models answers; falling through to step 2 during that
+  # window would otherwise misreport our own not-yet-healthy server as a
+  # "foreign" port holder.
+  if _read_pidfile "$pidfile" && _pid_alive "$PID"; then
+    if _health_ok "$PORT"; then
+      echo "vindex-serve: already running (pid $PID, backend=$BACKEND_STORED, vindex=$VINDEX_STORED)"
+    else
+      echo "vindex-serve: already running (pid $PID, backend=$BACKEND_STORED, vindex=$VINDEX_STORED); not yet healthy"
+    fi
+    return 0
+  fi
+
+  # 2. Port held by something that is NOT our (possibly stale) pidfile PID?
+  local holder_pid
+  holder_pid="$(_port_holder_pid "$PORT")"
+  if [ -n "$holder_pid" ] && [ "$holder_pid" != "${PID:-}" ]; then
+    echo "vindex-serve: port $PORT held by foreign pid $holder_pid — refusing" >&2
+    return 1
+  fi
+
+  # 3. Launch.
+  local backend patched
+  backend="$(_resolve_backend)"
+  patched="$(_resolve_patched "$backend")"
+  _build_backend_cmd "$backend"
+
+  "${BACKEND_CMD_ARR[@]}" > "$logfile" 2>&1 &
+  local server_pid=$!
+  disown "$server_pid" 2>/dev/null || true
+  printf '%s\t%s\t%s\t%s\n' "$server_pid" "$backend" "$VINDEX" "$patched" > "$pidfile"
+
+  local deadline
+  deadline=$(( $(date +%s) + LARQL_START_TIMEOUT ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if ! _pid_alive "$server_pid"; then
+      echo "vindex-serve: backend (pid $server_pid) exited before becoming healthy" >&2
+      echo "--- backend log tail ($logfile) ---" >&2
+      tail -n 40 "$logfile" >&2 2>/dev/null || true
+      rm -f "$pidfile"
+      return 1
+    fi
+    if _health_ok "$PORT"; then
+      echo "vindex-serve: ready (pid $server_pid, backend=$backend, patched=$patched)"
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  echo "vindex-serve: timeout waiting for backend on port $PORT ($LARQL_START_TIMEOUT s)" >&2
+  echo "--- backend log tail ($logfile) ---" >&2
+  tail -n 40 "$logfile" >&2 2>/dev/null || true
+  kill "$server_pid" 2>/dev/null || true
+  rm -f "$pidfile"
+  return 1
+}
+
+cmd_status() {
+  local pidfile
+  pidfile="$(_pidfile_path)"
+
+  if ! _read_pidfile "$pidfile"; then
+    echo "vindex-serve: not running (no pidfile for port $PORT)"
+    return 3
+  fi
+  if ! _pid_alive "$PID"; then
+    echo "vindex-serve: stale (pid $PID not running; pidfile at $pidfile)"
+    return 3
+  fi
+  if _health_ok "$PORT"; then
+    echo "vindex-serve: running (pid $PID, backend=$BACKEND_STORED, vindex=$VINDEX_STORED, patched=$PATCHED_STORED); /v1/models OK"
+    return 0
+  fi
+  echo "vindex-serve: running (pid $PID, backend=$BACKEND_STORED, vindex=$VINDEX_STORED) but /v1/models not answering"
+  return 3
+}
+
+cmd_stop() {
+  local pidfile logfile
+  pidfile="$(_pidfile_path)"
+  logfile="$(_logfile_path)"
+
+  if ! _read_pidfile "$pidfile"; then
+    echo "vindex-serve: not running (no pidfile for port $PORT)"
+    return 0
+  fi
+  local pid="$PID"
+  local unit
+  unit="$(_scope_unit_from_log "$logfile")"
+
+  if _pid_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  # Belt-and-braces (see header comment's "KNOWN LIMITATION"): if the
+  # backend ran under larql-probe's cgroup path, the pid above is the
+  # larql-probe/sudo/systemd-run wrapper chain, NOT necessarily the payload
+  # -- confirmed empirically that killing it can leave the payload orphaned
+  # and still holding the port. Stop the scope directly by the name
+  # systemd-run itself reported at launch. Best-effort: `-n` never blocks on
+  # a password prompt, and failure here is not fatal on its own -- the
+  # port-release check below is the actual authoritative success signal.
+  if [ -n "$unit" ]; then
+    sudo -n systemctl stop "$unit" >/dev/null 2>&1 || true
+  fi
+
+  local waited=0
+  while [ "$waited" -lt 10 ] && _pid_alive "$pid"; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if _pid_alive "$pid"; then
+    kill -9 "$pid" 2>/dev/null || true
+    sleep 1
+  fi
+  rm -f "$pidfile"
+
+  waited=0
+  while [ "$waited" -lt 5 ] && [ -n "$(_port_holder_pid "$PORT")" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  local still_holder
+  still_holder="$(_port_holder_pid "$PORT")"
+  if [ -n "$still_holder" ]; then
+    echo "vindex-serve: WARNING: signaled pid $pid but port $PORT is still held (by pid $still_holder) after waiting -- the backend may have survived under an orphaned containment scope. Investigate manually (systemctl list-units 'run-*.scope', ss -tlnp)." >&2
+    return 1
+  fi
+
+  echo "vindex-serve: stopped (pid $pid)"
+  return 0
+}
+
+cmd_restart() {
+  cmd_stop || true
+  cmd_start
+}
+
+case "$ACTION" in
+  start) cmd_start; exit $? ;;
+  status) cmd_status; exit $? ;;
+  stop) cmd_stop; exit $? ;;
+  restart) cmd_restart; exit $? ;;
+esac
