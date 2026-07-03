@@ -315,6 +315,39 @@ rm -rf "$FORK_MARKERS"
 wait_port_free "$PORT"
 
 echo ""
+echo "--- 6c: --backend auto routes an f16/quant=none vindex (per its index.json) to the shim backend ---"
+PORT=18608
+F16_VINDEX=$(mktemp -d)
+cat > "$F16_VINDEX/index.json" <<'JSONEOF'
+{"version": 2, "dtype": "f16", "quant": "none"}
+JSONEOF
+out=$(bash "$BS" start --vindex "$F16_VINDEX" --port "$PORT" --backend auto 2>&1)
+rc=$?
+assert_exit "auto-detected start exits 0" "0" "$rc"
+assert_contains "auto resolves f16/quant=none to shim" "ready (pid" "$out"
+backend_field=$(cut -f2 "$(pidfile_for "$PORT")")
+assert_true "pidfile records backend=shim" "$([ "$backend_field" = "shim" ] && echo 1 || echo 0)"
+bash "$BS" stop --port "$PORT" >/dev/null 2>&1
+wait_port_free "$PORT"
+rm -rf "$F16_VINDEX"
+
+echo ""
+echo "--- 6d: --backend auto routes a non-f16/quantized vindex to the larql-serve backend ---"
+PORT=18609
+Q4K_VINDEX=$(mktemp -d)
+cat > "$Q4K_VINDEX/index.json" <<'JSONEOF'
+{"version": 2, "dtype": "q4k", "quant": "q4k"}
+JSONEOF
+out=$(bash "$BS" start --vindex "$Q4K_VINDEX" --port "$PORT" --backend auto 2>&1)
+rc=$?
+assert_exit "auto-detected start exits 0" "0" "$rc"
+backend_field=$(cut -f2 "$(pidfile_for "$PORT")")
+assert_true "pidfile records backend=larql (not f16/quant=none)" "$([ "$backend_field" = "larql" ] && echo 1 || echo 0)"
+bash "$BS" stop --port "$PORT" >/dev/null 2>&1
+wait_port_free "$PORT"
+rm -rf "$Q4K_VINDEX"
+
+echo ""
 echo "--- 7: no pattern-based process discovery/kill anywhere in the script ---"
 if grep -nE 'pkill|pgrep.*kill|kill .*\$\(' "$BS" > /tmp/vindex-serve-pattern-kill-check.$$; then
   echo "  FAIL: found pattern-kill-shaped code:"
