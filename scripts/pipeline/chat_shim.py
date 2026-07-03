@@ -19,10 +19,13 @@ silently diverge from the patched one).
 
 Prompt-templating contract: this shim does NOT re-template the incoming
 message. The LAST `role: "user"` message's `content` is passed VERBATIM as
-the INFER prompt string. Goose-side prompts are expected to already BE
-canonical-template prompts (lql_session.canonical_prompt's "The {rel words}
-of {entity} is" form, byte-exact vs tuning.rs) -- that templating is the
-ORCHESTRATOR's responsibility, never this shim's.
+the INFER prompt string, except that goose wraps the user text with an
+<info-msg> header inside the same message; the shim canonicalizes by
+stripping that wrapper -- a protocol adaptation equivalent to
+chat-templating, never altering the user's own text. Goose-side prompts
+are expected to already BE canonical-template prompts (lql_session.canonical_prompt's
+"The {rel words} of {entity} is" form, byte-exact vs tuning.rs) -- that
+templating is the ORCHESTRATOR's responsibility, never this shim's.
 
 stdlib only: http.server.ThreadingHTTPServer. The underlying driver is a
 serial subprocess resource (one repl session at a time, mirroring
@@ -51,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import threading
 import time
@@ -195,6 +199,20 @@ class ChatShim:
         }
 
     @staticmethod
+    def _canonicalize_content(content: str) -> str:
+        """Strip a leading <info-msg>...</info-msg> block from goose's wrapper.
+
+        Goose embeds session metadata inside the last user message as a
+        leading <info-msg> block; stripping it gives us the canonical prompt
+        (never altering the user's own text). The regex matches a leading
+        wrapper with optional surrounding whitespace, using DOTALL so .
+        matches newlines. If there is no leading wrapper, content passes
+        through untouched.
+        """
+        return re.sub(r'^\s*<info-msg>.*?</info-msg>\s*', '', content,
+                      flags=re.DOTALL)
+
+    @staticmethod
     def _last_user_content(body: dict) -> str | None:
         messages = body.get("messages")
         if not isinstance(messages, list):
@@ -214,6 +232,9 @@ class ChatShim:
         content -- callers turn that into the 400 JSON error. `stream` is
         the body's top-level `"stream"` key coerced to bool (goose sends
         `"stream": true`; absent/false is the original plain-JSON path).
+
+        Before returning, canonicalizes the user content by stripping any
+        leading <info-msg> wrapper that goose embeds.
         """
         try:
             body = json.loads(raw_body.decode("utf-8"))
@@ -225,6 +246,7 @@ class ChatShim:
         if content is None:
             raise _BadRequest("no \"messages\" entry with role \"user\" "
                               "and string content found")
+        content = self._canonicalize_content(content)
         return content, bool(body.get("stream", False))
 
     # -- http.server plumbing --------------------------------------------

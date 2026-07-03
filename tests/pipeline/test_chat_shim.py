@@ -400,6 +400,75 @@ def test_broken_pipe_client_disconnect_does_not_crash_server():
         _stop(shim, thread)
 
 
+# ── canonicalization (goose info-msg wrapper stripping, task 14b) ─────────
+def test_goose_info_msg_wrapper_stripped_from_infer_prompt():
+    """Goose embeds session metadata in an <info-msg> block at the start of
+    the user message. The shim strips this before passing the prompt to INFER.
+    This test uses the EXACT fixture from live capture: a multi-line info-msg
+    followed by the canonical question. The driver should receive only the
+    bare question."""
+    driver = FakeDriver()
+    shim, thread = _start(driver)
+    try:
+        # Exact captured fixture: goose's <info-msg> wrapper + the user question
+        content = """<info-msg>
+It is currently 2026-07-02 21:30:00
+Working directory: /home/user/work
+Current tasks and notes:
+Task 14b: chat shim canonicalization
+
+</info-msg>
+The part of matter of France is"""
+        body = {"messages": [
+            {"role": "system", "content": "you are a legal assistant"},
+            {"role": "user", "content": content},
+        ]}
+        _post(shim, "/v1/chat/completions", body)
+        [statements] = driver.sessions
+        # The INFER statement must contain only the bare question, no info-msg
+        assert statements == ['INFER "The part of matter of France is" TOP 5;']
+    finally:
+        _stop(shim, thread)
+
+
+def test_content_without_info_msg_wrapper_passes_through_untouched():
+    """Content that does not start with <info-msg> should pass through
+    completely untouched by the canonicalization."""
+    driver = FakeDriver()
+    shim, thread = _start(driver)
+    try:
+        question = "The capital of France is"
+        body = {"messages": [
+            {"role": "system", "content": "you are a legal assistant"},
+            {"role": "user", "content": question},
+        ]}
+        _post(shim, "/v1/chat/completions", body)
+        [statements] = driver.sessions
+        # The INFER statement must be exactly as provided
+        assert statements == [f'INFER "{question}" TOP 5;']
+    finally:
+        _stop(shim, thread)
+
+
+def test_info_msg_block_mid_text_not_stripped():
+    """An <info-msg> block appearing mid-text (not at the start) should NOT
+    be stripped, preserving the user's literal text."""
+    driver = FakeDriver()
+    shim, thread = _start(driver)
+    try:
+        # info-msg appearing in the middle, not at the start
+        question = "The answer is <info-msg>not this</info-msg> but this"
+        body = {"messages": [
+            {"role": "user", "content": question},
+        ]}
+        _post(shim, "/v1/chat/completions", body)
+        [statements] = driver.sessions
+        # The INFER statement must preserve the literal mid-text block
+        assert statements == [f'INFER "{question}" TOP 5;']
+    finally:
+        _stop(shim, thread)
+
+
 def test_load_patches_reads_step_vlp_sorted(tmp_path):
     (tmp_path / "step-0002.vlp").write_text("b")
     (tmp_path / "step-0001.vlp").write_text("a")
