@@ -2,9 +2,15 @@
 set -euo pipefail
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Mock goose binary — records provider env vars and returns a fixed response.
-# Records each invocation to $MOCK_CALL_LOG if set.
+# Seams:
+#   MOCK_CALL_LOG — if set, logs invocation
+#   MOCK_GOOSE_EXIT — exit code to return (default: 0)
+#   MOCK_GOOSE_STDERR — if set, outputs this message to stderr
 if [ -n "${MOCK_CALL_LOG:-}" ]; then
   echo "goose GOOSE_PROVIDER=${GOOSE_PROVIDER:-} GOOSE_MODEL=${GOOSE_MODEL:-} GOOSE_MODE=${GOOSE_MODE:-} OPENAI_BASE_URL=${OPENAI_BASE_URL:-} args=$*" >> "$MOCK_CALL_LOG"
 fi
 echo '{"content":"mock goose response"}'
+if [ -n "${MOCK_GOOSE_STDERR:-}" ]; then
+  echo "$MOCK_GOOSE_STDERR" >&2
+fi
 exit "${MOCK_GOOSE_EXIT:-0}"

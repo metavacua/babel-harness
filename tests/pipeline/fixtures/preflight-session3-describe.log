@@ -1,0 +1,129 @@
+[0;34m·[0m session shells:
+  claude code: 1 shell(s)  [current=shell-1]
+  shell-1   ~/legal-theory                 idle [me]
+
+Running scope as unit: run-r105cfb059feb469881e56818e322ee13.scope
+
+   ╦   ╔═╗ ╦═╗ ╔═╗ ╦
+   ║   ╠═╣ ╠╦╝ ║═╬╗║
+   ╩═╝ ╩ ╩ ╩╚═ ╚═╝╚╩═╝
+   Lazarus Query Language v0.1
+
+Using: /home/metavacua/work/vindexes/smollm2-360m-canonical.vindex (32 layers, 81.9K features, model: /home/metavacua/smollm2-360m-src)
+Applied: /tmp/claude-1000/-home-metavacua-legal-theory/0d9c6237-5419-4d6f-99d5-fe633340f374/scratchpad/probe.vlp (1 operations: 1 inserts, 0 updates, 0 deletes)
+__ProbeSubject__
+  signal: moderate (1 edges, max gate 10.0)
+  Edges (L13-25):
+                 → ProbeTargetValue        10.0  L24 
+Predictions (walk FFN):
+   1.  =                   (6.33%)
+   2. s                    (5.49%)
+   3. _                    (5.19%)
+   4. =                    (5.15%)
+   5. .                    (4.65%)
+  4497ms
+
+Inference trace (features that fired with attention):
+  L 0:  F2396  gate=+2.4  → uggage          [uggage, cerity, ocaly]
+  L 0:  F2001  gate=+2.0  → firehose        [firehose, ilantro, onsai]
+  L 0:  F328   gate=+1.9  → olkien          [olkien, ilantro, emeteries]
+  L 1:  F412   gate=-2.4  → aughed          [aughed, stuffs, jango]
+  L 1:  F688   gate=-1.9  → uckingham       [uckingham, ousseau, ayette]
+  L 1:  F396   gate=-1.8  → astrous         [astrous, cephal, arvation]
+  L 2:  F668   gate=-3.2  → omegran         [omegran, Institutions, ilantro]
+  L 2:  F2413  gate=+2.4  → (               [(, ", a]
+  L 2:  F468   gate=-2.3  → KeyNot          [KeyNot, numerable, sofar]
+  L 3:  F962   gate=-10.7  → ilantro         [ilantro, emeteries, emetery]
+  L 3:  F224   gate=-2.7  → erately         [erately, aws, "—]
+  L 3:  F1794  gate=-2.6  → ilantro         [ilantro, emeteries, emetery]
+  L 4:  F1484  gate=-2.5  → lect            [lect, About, counter]
+  L 4:  F1353  gate=-2.4  → �               [�, together, ones]
+  L 4:  F552   gate=-2.1  → reponame        [reponame, outheastern, opold]
+  L 5:  F2427  gate=+2.0  → umab            [umab, ethoven, eveloped]
+  L 5:  F1247  gate=-1.6  → outheastern     [outheastern, racuse, termedi]
+  L 5:  F2086  gate=-1.6  → ignon           [ignon, fowl, oflavin]
+  L 6:  F494   gate=+2.3  → eveloped        [eveloped, iagnosed, CreateModel]
+  L 6:  F2188  gate=-2.0  → __":            [__":, klah, nexpected]
+  L 6:  F2376  gate=-2.0  → aspberries      [aspberries, irmingham, aughed]
+  L 7:  F1692  gate=-3.0  → oarthritis      [oarthritis, continence, erd]
+  L 7:  F233   gate=-2.5  → rather          [rather, there, vs]
+  L 7:  F1941  gate=-2.4  → omencl          [omencl, lehem, apagos]
+  L 8:  F376   gate=-3.9  → aloader         [aloader, cation, Reals]
+  L 8:  F1187  gate=-3.8  → cott            [cott, elescope, jo]
+  L 8:  F711   gate=-3.7  → bittern         [bittern, hog, ered]
+  L 9:  F129   gate=-4.0  → ogen            [ogen, ediatrics, iriam]
+  L 9:  F1374  gate=+3.4  → ing             [ing, impul, ---------------------------------------------]
+  L 9:  F1971  gate=-3.2  → riks            [riks, exchange, ½]
+  L10:  F2044  gate=-2.5  → imbabwe         [imbabwe, ocultural, ceptives]
+  L10:  F1142  gate=-2.4  → orget           [orget, fowl, AttributeError]
+  L10:  F2153  gate=+2.3  → __),            [__),, particular, "]
+  L11:  F172   gate=-3.1  → R               [R, (, new]
+  L11:  F1967  gate=-2.7  → ilantro         [ilantro, yalgia, ruary]
+  L11:  F31    gate=-2.3  → riday           [riday, nex, ynasty]
+  L12:  F2082  gate=-4.2  → s               [s, _, a]
+  L12:  F2492  gate=-3.0  → oleum           [oleum, quir, adays]
+  L12:  F2456  gate=-3.0  → not             [not, ic, the]
+  L13:  F1318  gate=-9.7  → (               [(, ", m]
+  L13:  F881   gate=-4.4  → hesia           [hesia, WARRANTIES, amide]
+  L13:  F1736  gate=-3.2  → ChannelType     [ChannelType, Pregn, istically]
+  L14:  F1004  gate=+3.4  → ilage           [ilage, termedi, theless]
+  L14:  F733   gate=-3.0  → swered          [swered, readability, oubted]
+  L14:  F476   gate=-2.7  → __':            [__':, ��, caping]
+  L15:  F2431  gate=-5.4  → termedi         [termedi, stuffs, cipline]
+  L15:  F282   gate=-3.4  → than            [than, than, Than]
+  L15:  F1350  gate=-3.3  → \_              [\_, \*, rowsiness]
+  L16:  F1370  gate=-3.6  → currently       [currently, now, ']
+  L16:  F1661  gate=-3.4  → omegran         [omegran, odeficiency, uggage]
+  L16:  F1637  gate=+2.5  → "               [", (, in]
+  L17:  F195   gate=-5.8  → __()            [__(), ]]:, ]||]
+  L17:  F245   gate=-4.3  → juna            [juna, osaics, quartered]
+  L17:  F1336  gate=-3.7  → ('.//           [('.//, LICENSE, noqa]
+  L18:  F2201  gate=-3.9  → ciplinary       [ciplinary, enfranch, iddles]
+  L18:  F2005  gate=-3.3  → ############################################################################ [############################################################################, Wikimedia, ################################################################################]
+  L18:  F1302  gate=-3.3  → OG              [OG, ranç, neurotransmit]
+  L19:  F2085  gate=-4.0  → their           [their, his, himself]
+  L19:  F2339  gate=-2.8  → one             [one, last, later]
+  L19:  F1484  gate=+2.6  → \_              [\_, \*, \*]
+  L20:  F167   gate=-3.3  → inarily         [inarily, leanor, ULAR]
+  L20:  F1470  gate=-2.8  → :               [:, ly, one]
+  L20:  F1130  gate=-2.8  → guise           [guise, behalf, detriment]
+  L21:  F69    gate=-4.7  → rowsiness       [rowsiness, claim, rusted]
+  L21:  F265   gate=-4.4  → earlier         [earlier, previously, previous]
+  L21:  F1614  gate=-4.3  → ISTORY          [ISTORY, reponame, oolean]
+  L22:  F1738  gate=-4.5  → or              [or, or, ||]
+  L22:  F113   gate=-4.3  → himself         [himself, his, themselves]
+  L22:  F1074  gate=-3.7  → peror           [peror, "?, icrob]
+  L23:  F3     gate=-5.5  → product         [product, products, uj]
+  L23:  F1223  gate=-4.8  → hers            [hers, ethoven, ditionally]
+  L23:  F1269  gate=+4.4  → etheless        [etheless, last, stra]
+  L24:  F2497  gate=-4.7  → lite            [lite, their, gentlemen]
+  L24:  F2197  gate=-4.3  → perature        [perature, pros, itarian]
+  L24:  F1126  gate=-3.7  → them            [them, them, it]
+  L25:  F2247  gate=-4.6  → iscrim          [iscrim, tysburg, ousseau]
+  L25:  F614   gate=-3.8  → ternity         [ternity, On, anasia]
+  L25:  F1237  gate=-3.7  → him             [him, Them, them]
+  L26:  F2105  gate=-5.7  → ietzsche        [ietzsche, olkien, ortunately]
+  L26:  F914   gate=+5.6  → (               [(, ", a]
+  L26:  F1764  gate=+4.6  → olkien          [olkien, ilantro, forgettable]
+  L27:  F1741  gate=+5.5  → ilantro         [ilantro, emeteries, uggage]
+  L27:  F551   gate=-5.2  → \               [\, \'', \"]
+  L27:  F1224  gate=-3.9  → oubted          [oubted, MUST, berspace]
+  L28:  F1886  gate=-5.3  → henge           [henge, olkien, else]
+  L28:  F1255  gate=+4.8  → (               [(, ", d]
+  L28:  F733   gate=-3.8  → zekiel          [zekiel, omencl, chimpan]
+  L29:  F1322  gate=+4.2  → "               [", m, (]
+  L29:  F2335  gate=+4.0  → m               [m, Â, (]
+  L29:  F678   gate=+3.9  → S               [S, s, d]
+  L30:  F2279  gate=-8.4  → c               [c, s, ...]
+  L30:  F1127  gate=+7.5  → pancreat        [pancreat, antioxid, comings]
+  L30:  F25    gate=+7.2  → m               [m, f, w]
+  L31:  F2060  gate=+14.0  → ilantro         [ilantro, emeteries, olkien]
+  L31:  F446   gate=+14.0  → (               [(, a, ,]
+  L31:  F2496  gate=+13.8  → "               [", S, “]
+Goodbye.
+[0;34m·[0m isolation: cgroup(mem=2500MB,cpus=6/8,weight=20)
+[0;34m·[0m threads:   RAYON_NUM_THREADS=6  TOKIO_WORKER_THREADS=6
+[0;34m·[0m log:       /home/metavacua/.larql-probe/20260702-090536-larql.jsonl
+
+[0;32m✓[0m success  peak RSS 1735 MB / limit 2500 MB  [31452ms]
+[0;34m·[0m logs: /home/metavacua/.larql-probe/20260702-090536-larql.jsonl  meta: /home/metavacua/.larql-probe/20260702-090536-larql.meta.json
