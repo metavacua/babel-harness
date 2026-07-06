@@ -76,6 +76,7 @@ out=$(PATH="$MOCKS:$PATH" \
 rc=$?
 assert_exit "exits 0" "0" "$rc"
 assert_contains "goose called with openrouter provider" "GOOSE_PROVIDER=openrouter" "$(cat "$calllog")"
+assert_contains "default model is openrouter's dynamic free-model router, not a hardcoded single free model (root cause: bin/coding-agent's OPENROUTER_MODEL default hit a live rate limit twice in manual verification with no fallback)" "GOOSE_MODEL=openrouter/free" "$(cat "$calllog")"
 rm -f "$calllog"
 
 echo ""
