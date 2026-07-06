@@ -135,9 +135,10 @@ def _interpret_coding_agent_test_output(rc: int, out: str) -> tuple[bool, str]:
     failures) rather than a specific historical test count — a hardcoded count
     is guaranteed to go stale the moment a new test is legitimately added.
     """
-    evidence = f"exit={rc} " + (re.search(r'Results:.*', out) or re.compile('.')).group()
-    m = re.search(r'Results:\s*(\d+)\s+passed,\s*0\s+failed', out)
-    passed_count = int(m.group(1)) if m else 0
+    results_line = re.search(r'Results:.*', out)
+    evidence = f"exit={rc} " + (results_line.group() if results_line else "no Results line")
+    passed_match = re.search(r'Results:\s*(\d+)\s+passed,\s*0\s+failed', out)
+    passed_count = int(passed_match.group(1)) if passed_match else 0
     return rc == 0 and passed_count > 0, evidence
 
 
@@ -220,7 +221,7 @@ CLAIMS = [
     ("B2",
      "test-coding-agent.bash: all 41 tests pass",
      "spec — '41 existing tests pass'",
-     lambda: _check_coding_agent_tests()),
+     _check_coding_agent_tests),
 
     ("B3",
      "github_graph.py --output lql: generates INSERT triples for chrishayuk/larql",

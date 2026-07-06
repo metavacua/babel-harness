@@ -10,17 +10,13 @@ made B2 report REFUTED despite the underlying suite being entirely healthy.
 These tests exercise the pure decision logic directly (no subprocess), so
 they run fast and deterministically.
 """
-import importlib.util
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).parent.parent
-SPEC_PROOF_PATH = REPO / "scripts" / "spec_proof.py"
 
-spec = importlib.util.spec_from_file_location("spec_proof", SPEC_PROOF_PATH)
-spec_proof = importlib.util.module_from_spec(spec)
-sys.modules["spec_proof"] = spec_proof
-spec.loader.exec_module(spec_proof)
+sys.path.insert(0, str(REPO / "scripts"))
+import spec_proof
 
 
 def test_current_count_52_should_be_proven():
