@@ -45,7 +45,7 @@ jobs:
           retention-days: 1
 
   extract-serve:
-    name: "extract→gate→serve: ${{ matrix.model }}"
+    name: "extract→gate→serve: ${{ matrix.model }} (${{ matrix.format }})"
     needs: build
     runs-on: ubuntu-latest
     strategy:
@@ -54,6 +54,9 @@ jobs:
         model:
           - "HuggingFaceTB/SmolLM2-135M"
           - "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+        format:
+          - "f16"    # reproduces #253 (server chat panics on quant=none)
+          - "q4k"    # the goal path: server-serveable Q4K vindex → drives babel
     steps:
       - uses: actions/checkout@v5          # babel-harness — for scripts/vindex_completeness.py
       - uses: actions/download-artifact@v4
@@ -68,6 +71,7 @@ jobs:
       - name: model pull + extract → vindex (streamed, resource-tracked)
         env:
           MODEL: ${{ matrix.model }}
+          FMT: ${{ matrix.format }}
         run: |
           set -x
           export PATH="$PWD/bin:$PATH"
@@ -75,10 +79,15 @@ jobs:
           larql model pull "$MODEL" 2>&1 | tee /tmp/pull.log | tail -25 || echo "PULL_FAIL rc=$?"
           SNAP=$(grep -aoE 'Downloaded to: .*' /tmp/pull.log | sed 's/Downloaded to: //' | tail -1)
           echo "snapshot=[$SNAP]"
-          # 2. convert safetensors → vindex (the model-pull-suggested recipe), resource-tracked
+          # 2. extract → vindex. INPUT is POSITIONAL (larql's own model-pull hint wrongly says --input).
           if [ -n "$SNAP" ]; then
-            /usr/bin/time -v larql convert safetensors-to-vindex --input "$SNAP" --output /tmp/model.vindex --f16 \
-              > /tmp/extract.log 2>&1 || echo "EXTRACT_FAIL rc=$?"
+            if [ "$FMT" = "q4k" ]; then
+              # server-serveable Q4K (Q4_K q/k/o/gate/up, Q6_K v/down — Ollama-compatible) → the goal path
+              /usr/bin/time -v larql extract "$SNAP" --output /tmp/model.vindex --quant q4k > /tmp/extract.log 2>&1 || echo "EXTRACT_FAIL rc=$?"
+            else
+              # f16 (quant=none) → reproduces #253 on serve
+              /usr/bin/time -v larql convert safetensors-to-vindex "$SNAP" --output /tmp/model.vindex --f16 > /tmp/extract.log 2>&1 || echo "EXTRACT_FAIL rc=$?"
+            fi
           else
             echo "no snapshot path parsed — dumping pull tail"; tail -5 /tmp/pull.log
           fi
@@ -108,3 +117,22 @@ jobs:
             -d '{"model":"testmodel","messages":[{"role":"user","content":"Reply with one word: OK"}],"max_tokens":8}' | head -c 800; echo
           echo "--- serve log tail (panic on f16? #253) ---"; tail -25 /tmp/serve.log
           kill "$SVPID" 2>/dev/null || true
+
+      - name: on ERROR — the REAL babel harness debugs the failure in CI
+        if: failure()
+        run: |
+          set -x
+          # provision babel's working local backend (base qwen2.5:0.5b emits structured tool calls, PR #23)
+          npm install -g @earendil-works/pi-coding-agent@0.75.4 || true
+          mkdir -p ~/.pi/agent && cp config/pi-models.json ~/.pi/agent/models.json
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          ollama pull qwen2.5:0.5b
+          # feed the failing larql logs to the ACTUAL bin/babel (not a curl fake)
+          LOG="$(tail -40 /tmp/extract.log /tmp/serve.log /tmp/pull.log 2>/dev/null | head -c 3000)"
+          export PATH="$PWD/bin:$PATH"
+          OPENROUTER_CHECK_URL="http://127.0.0.1:1/none" OLLAMA_MODEL="qwen2.5:0.5b" \
+            bin/babel --backend ollama "A larql CI step failed. From this log, state the root cause and the fix concisely: $LOG" \
+            2>&1 | tee /tmp/babel-diag.log | tail -30 || true
+          { echo "## babel on-error diagnosis (REAL harness, qwen2.5:0.5b)"; echo '```'; tail -25 /tmp/babel-diag.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
