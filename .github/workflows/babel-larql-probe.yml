@@ -58,7 +58,7 @@ jobs:
         run: |
           export PATH="$PWD/larql-src/target/release:$PATH"
           t0=$(date +%s)
-          larql serve hf://chrishayuk/gemma-3-4b-it-vindex --port 8181 --no-memcheck > /tmp/serve.log 2>&1 &
+          larql serve hf://chrishayuk/gemma-3-4b-it-vindex --port 8181 > /tmp/serve.log 2>&1 &
           ready=0
           for i in $(seq 1 240); do curl -fsS http://localhost:8181/v1/models >/dev/null 2>&1 && { ready=1; break; }; sleep 2; done
           t1=$(date +%s)
