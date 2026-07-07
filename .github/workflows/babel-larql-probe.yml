@@ -1,12 +1,14 @@
-# larql-as-an-ordinary-LM verification. Grabs an UNGATED gemma-3-4b Q4_K_M GGUF
-# from HuggingFace, converts it to a Q4K vindex in CI (`larql convert
-# gguf-to-vindex`), serves it, and exercises the OpenAI-compat /v1 API — the
-# contract bin/babel + goose consume. Q4K avoids the f16/#245 serve panic hit by
-# the prebuilt gemma-3-4b-it-vindex (which is f16). Also drives bin/babel's larql
-# backend end-to-end (best-effort — goose).
+# larql-as-an-ordinary-LM verification — WORKING-AGENT-FIRST.
+# Serves a COMPLETE PUBLISHED Q4K vindex (chrishayuk/granite-4.1-3b-q4k-vindex:
+# has Q4K attn slices + Q4K FFN + tokenizer) over the OpenAI-compat /v1 API — the
+# contract bin/babel + goose consume. Q4K avoids the f16/#245 serve panic; a
+# prebuilt vindex avoids the gemma tokenizer-sidecar / convert / local-path
+# friction. Also drives bin/babel's larql backend end-to-end (best-effort).
 #
-# Heavy (cold Rust build ~10min + GGUF download + convert). Runs on manual
-# dispatch or when this file / bin/babel changes. Timeout under GitHub's 6h cap.
+# (gemma-3-4b-q4k needs its tokenizer sourced separately — no ungated
+# gemma-3-4b tokenizer.json exists and the GGUFs embed it; tracked as follow-up.)
+#
+# Heavy (cold Rust build ~10min). Manual dispatch or on this file / bin/babel change.
 name: babel-larql-probe
 
 on:
@@ -21,7 +23,7 @@ permissions:
 
 jobs:
   larql-as-lm:
-    name: build larql + gemma Q4K vindex (extract in CI) + /v1 + bin/babel
+    name: build larql + serve published Q4K vindex + /v1 + bin/babel
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -42,40 +44,20 @@ jobs:
           t0=$(date +%s)
           cargo build --release -p larql-cli -p larql-server 2>&1 | tail -20
           t1=$(date +%s)
-          echo "## larql-as-LM verify (gemma-3-4b Q4K, extracted in CI)" >> "$GITHUB_STEP_SUMMARY"
+          echo "## larql-as-LM verify (published granite-4.1-3b Q4K vindex)" >> "$GITHUB_STEP_SUMMARY"
           echo "- build (cli+server): $((t1-t0))s" >> "$GITHUB_STEP_SUMMARY"
           ls -la target/release/larql target/release/larql-server
 
-      - name: download ungated gemma-3-4b Q4_K_M GGUF (TIMED)
-        run: |
-          pip install -q "huggingface_hub>=0.23"
-          t0=$(date +%s)
-          gguf=$(python3 -c "from huggingface_hub import hf_hub_download; print(hf_hub_download('ggml-org/gemma-3-4b-it-GGUF','gemma-3-4b-it-Q4_K_M.gguf'))")
-          t1=$(date +%s)
-          echo "GGUF=$gguf" >> "$GITHUB_ENV"
-          echo "- GGUF download: $((t1-t0))s ($(du -h "$gguf" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: convert GGUF -> Q4K vindex, extracted in CI (TIMED)
+      - name: serve published Q4K vindex + OpenAI-compat /v1 (MUST pass)
         run: |
           export PATH="$PWD/larql-src/target/release:$PATH"
-          V="$GITHUB_WORKSPACE/gemma-q4k.vindex"          # absolute — larql treats ./rel as hf:// ref
-          echo "VINDEX_DIR=$V" >> "$GITHUB_ENV"
+          VREF="hf://chrishayuk/granite-4.1-3b-q4k-vindex"
           t0=$(date +%s)
-          larql convert gguf-to-vindex "$GGUF" --output "$V" 2>&1 | tail -30
-          t1=$(date +%s)
-          echo "- convert gguf->vindex: $((t1-t0))s ($(du -sh "$V" 2>/dev/null | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-          echo '=== vindex dir ==='; ls -la "$V" | head
-          echo '=== vindex metadata (quant/level — reveals #245 risk) ==='; larql show "$V" 2>&1 | head -20
-
-      - name: serve + OpenAI-compat /v1 (the LM interface — MUST pass)
-        run: |
-          export PATH="$PWD/larql-src/target/release:$PATH"
-          t0=$(date +%s)
-          larql serve "$VINDEX_DIR" --port 8181 > /tmp/serve.log 2>&1 &
+          larql serve "$VREF" --port 8181 > /tmp/serve.log 2>&1 &
           ready=0
-          for i in $(seq 1 240); do curl -fsS http://localhost:8181/v1/models >/dev/null 2>&1 && { ready=1; break; }; sleep 2; done
+          for i in $(seq 1 300); do curl -fsS http://localhost:8181/v1/models >/dev/null 2>&1 && { ready=1; break; }; sleep 2; done
           t1=$(date +%s)
-          echo "- serve ready: $((t1-t0))s (ready=$ready)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- serve ready (pull+preload): $((t1-t0))s (ready=$ready)" >> "$GITHUB_STEP_SUMMARY"
           echo '=== serve.log (tail) ==='; tail -40 /tmp/serve.log
           [ "$ready" = "1" ] || { echo "serve never listed /v1/models"; exit 1; }
           echo '=== /v1/models ==='; curl -fsS http://localhost:8181/v1/models | tee /tmp/models.json; echo
@@ -85,10 +67,10 @@ jobs:
                  -H 'content-type: application/json' \
                  -d "{\"model\":\"$mid\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly one word: OK\"}],\"max_tokens\":8,\"temperature\":0}")
           echo "HTTP $code"; cat /tmp/resp.json; echo
-          echo '=== serve.log after infer (tail) ==='; tail -30 /tmp/serve.log
+          echo '=== serve.log after infer ==='; tail -30 /tmp/serve.log
           if [ "$code" != "200" ]; then echo "- **/v1 INFER**: HTTP $code (see serve.log)" >> "$GITHUB_STEP_SUMMARY"; exit 1; fi
           content=$(python3 -c 'import json;print(json.load(open("/tmp/resp.json"))["choices"][0]["message"]["content"])' 2>/dev/null || head -c 100 /tmp/resp.json)
-          echo "- **/v1 completion**: \`$content\` (model \`$mid\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **/v1 completion**: \`$content\` (model \`$mid\`) — WORKING LARQL AGENT" >> "$GITHUB_STEP_SUMMARY"
 
       - name: drive bin/babel --backend larql against the running server (best-effort)
         continue-on-error: true
@@ -96,8 +78,8 @@ jobs:
           set -x
           curl -fsSL https://raw.githubusercontent.com/block/goose/main/download_cli.sh -o /tmp/gi.sh 2>/dev/null && CONFIGURE=false bash /tmp/gi.sh || echo "goose install returned nonzero"
           export PATH="$HOME/.local/bin:$PWD/larql-src/target/release:$PATH"
-          goose --version || { echo "goose unavailable — babel's larql backend routes through goose; recording as gap"; exit 1; }
+          goose --version || { echo "goose unavailable — recording as gap"; exit 1; }
           out=$(LARQL_PORT=8181 LARQL_BIN="$PWD/larql-src/target/release/larql" LARQL_NO_CGROUP=1 GOOSE_BIN=goose \
-                bash bin/babel --backend larql --vindex "$VINDEX_DIR" "Reply with exactly one word: OK" 2>&1)
+                bash bin/babel --backend larql --vindex granite-4.1-3b-q4k-vindex "Reply with exactly one word: OK" 2>&1)
           echo "$out"
           echo "- **bin/babel --backend larql**: $(echo "$out" | grep -o '{\"type\":\"babel_result\".*}' | head -1)" >> "$GITHUB_STEP_SUMMARY"
