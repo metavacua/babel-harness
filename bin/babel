@@ -19,6 +19,7 @@ GOOSE_BIN="${GOOSE_BIN:-goose}"
 LARQL_BIN="${LARQL_BIN:-$HOME/larql/target/release/larql}"
 OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/models}"
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-openrouter/free}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:0.5b}"   # opt-in local model; feasible on a CI runner, not this low-RAM dev box
 LARQL_PORT="${LARQL_PORT:-8080}"
 LARQL_VINDEX="${LARQL_VINDEX:-smollm2-360m}"
 LARQL_READY_TRIES="${LARQL_READY_TRIES:-3}"
@@ -69,6 +70,10 @@ run_backend() {
   case "$b" in
     pi)
       RB_OUT="$("$PI_BIN" --provider openrouter --model "$OPENROUTER_MODEL" --print --mode json "$task" 2>&1)" || RB_RC=$? ;;
+    ollama)
+      # opt-in local model: drive the Pi agent at a local ollama server. Not in the
+      # AUTO chain (larql is the local terminal per ADR-0001); explicit --backend only.
+      RB_OUT="$("$PI_BIN" --provider ollama --model "$OLLAMA_MODEL" --print --mode json "$task" 2>&1)" || RB_RC=$? ;;
     goose)
       RB_OUT="$(GOOSE_PROVIDER=openrouter GOOSE_MODEL="$OPENROUTER_MODEL" GOOSE_MODE=auto "$GOOSE_BIN" run -t "$task" 2>&1)" || RB_RC=$? ;;
     larql)
@@ -88,7 +93,7 @@ run_backend() {
 BACKEND="auto"; VINDEX=""; TASK=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --backend) BACKEND="${2:?--backend requires pi|goose|larql}"; shift 2 ;;
+    --backend) BACKEND="${2:?--backend requires pi|goose|larql|ollama}"; shift 2 ;;
     --vindex)  VINDEX="${2:?--vindex requires a value}"; shift 2 ;;
     --model)   OPENROUTER_MODEL="${2:?--model requires a value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;

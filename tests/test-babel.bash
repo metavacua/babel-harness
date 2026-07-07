@@ -83,5 +83,14 @@ run_babel "MOCK_CURL_OPENROUTER_EXIT=0 MOCK_GOOSE_RATE_LIMIT=1" --backend goose 
 ok_contains "all-exhausted yields a structured fatal envelope" '"ok":false' "$__OUT"
 no_contains "fatal path still hides the raw rate-limit text externally" "Ran into this error" "$__OUT"
 
+# 9. OPT-IN ollama backend: `--backend ollama` routes the Pi agent at a local
+#    ollama model (`--provider ollama`). This is the local model babel depends on
+#    where ollama is feasible (CI runners), kept OPT-IN so the AUTO chain stays
+#    larql-only (test 3) per ADR-0001's "ollama demoted to opt-in".
+run_babel "MOCK_CURL_OPENROUTER_EXIT=0 OLLAMA_MODEL=qwen2.5:0.5b" --backend ollama "ask the local model"
+ok_contains "--backend ollama drives the Pi agent with provider=ollama" "provider=ollama" "$__ERR"
+ok_contains "ollama run reports its model" "model=qwen2.5:0.5b" "$__ERR"
+ok_contains "envelope names the ollama backend" '"backend":"ollama"' "$__OUT"
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
