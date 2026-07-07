@@ -56,8 +56,9 @@ jobs:
           curl -fsSL https://ollama.com/install.sh | sh
           nohup ollama serve >/tmp/ollama.log 2>&1 &
           for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
-          # phi3:mini is a model pi's ollama provider recognizes (qwen2.5:0.5b is not listed).
-          ollama pull phi3:mini
+          # qwen2.5:0.5b — the lightest TOOL-CAPABLE model (the pi coding agent needs function
+          # calling; phi3:mini does not support tools). Defined in config/pi-models.json.
+          ollama pull qwen2.5:0.5b
           ollama list
 
       - name: diagnostic — does pi see the ollama model? (pi discovers from the live ollama)
@@ -68,7 +69,7 @@ jobs:
       - name: run the REAL babel harness on the local model (no cloud)
         env:
           OPENROUTER_CHECK_URL: "http://127.0.0.1:1/none"   # force no cloud provider
-          OLLAMA_MODEL: "phi3:mini"
+          OLLAMA_MODEL: "qwen2.5:0.5b"
         run: |
           set -x
           export PATH="$PWD/bin:$PATH"
@@ -92,4 +93,6 @@ jobs:
           echo "$out" | grep -q '"type":"babel_result"' || { echo "FAIL: no babel_result envelope — the harness did not emit its contract"; exit 1; }
           echo "$out" | grep -q '"backend":"ollama"'   || { echo "FAIL: did not complete on the ollama backend (degraded?)"; exit 1; }
           echo "$out" | grep -q '"ok":true'            || { echo "FAIL: babel reported ok:false"; exit 1; }
-          echo "PASS: the real bin/babel ran a task on the local ollama model in CI"
+          # the agent must be able to USE the model — reject a model that can't do tools (pi needs function calling)
+          if grep -q "does not support tools" /tmp/babel-err.txt; then echo "FAIL: local model can't do tools — pi coding agent cannot function"; exit 1; fi
+          echo "PASS: the real bin/babel ran a real agent task on a tool-capable local model in CI"
