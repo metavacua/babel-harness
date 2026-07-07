@@ -49,7 +49,7 @@ emit_envelope() { printf '{"type":"babel_result","backend":"%s","ok":%s}\n' "$1"
 # a provider rate-limit / error sentinel (Goose exits 0 even when rate-limited).
 _needs_degrade() {
   [ "${RB_RC:-0}" -ne 0 ] && return 0
-  printf '%s' "${RB_OUT:-}" | grep -qiE 'rate.?limit|Ran into this error|Provider returned error|no provider available' && return 0
+  printf '%s' "${RB_OUT:-}" | grep -qiE 'rate.?limit|Ran into this error|Provider returned error|no provider available|error decoding response|stream decode error|Network error' && return 0
   return 1
 }
 

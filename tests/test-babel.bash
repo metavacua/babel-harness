@@ -92,5 +92,10 @@ ok_contains "--backend ollama drives the Pi agent with provider=ollama" "provide
 ok_contains "ollama run reports its model" "model=qwen2.5:0.5b" "$__ERR"
 ok_contains "envelope names the ollama backend" '"backend":"ollama"' "$__OUT"
 
+# 10. A Goose STREAM-DECODE / network error (Goose still exits 0) must be treated as a
+#     FAILURE, not a false ok:true — found empirically when a vindex drove babel via larql SSE.
+run_babel "MOCK_CURL_OPENROUTER_EXIT=0 MOCK_GOOSE_STREAM_ERR=1" --backend goose stream decode case
+ok_contains "goose stream-decode error is caught (not a false ok:true)" '"ok":false' "$__OUT"
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
