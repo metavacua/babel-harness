@@ -14,7 +14,7 @@ name: babel-ci
 on:
   pull_request:
   push:
-    branches: [main, "claude/**"]
+    branches: [main]   # feature branches are covered by pull_request; avoids the push+PR double-run
   workflow_dispatch:
 
 permissions:
