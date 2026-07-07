@@ -58,17 +58,20 @@ jobs:
       - name: convert GGUF -> Q4K vindex, extracted in CI (TIMED)
         run: |
           export PATH="$PWD/larql-src/target/release:$PATH"
+          V="$GITHUB_WORKSPACE/gemma-q4k.vindex"          # absolute — larql treats ./rel as hf:// ref
+          echo "VINDEX_DIR=$V" >> "$GITHUB_ENV"
           t0=$(date +%s)
-          larql convert gguf-to-vindex "$GGUF" --output ./gemma-q4k.vindex 2>&1 | tail -30
+          larql convert gguf-to-vindex "$GGUF" --output "$V" 2>&1 | tail -30
           t1=$(date +%s)
-          echo "- convert gguf->vindex: $((t1-t0))s ($(du -sh ./gemma-q4k.vindex 2>/dev/null | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-          echo '=== vindex metadata (quant/level) ==='; larql show ./gemma-q4k.vindex 2>&1 | head -20
+          echo "- convert gguf->vindex: $((t1-t0))s ($(du -sh "$V" 2>/dev/null | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+          echo '=== vindex dir ==='; ls -la "$V" | head
+          echo '=== vindex metadata (quant/level — reveals #245 risk) ==='; larql show "$V" 2>&1 | head -20
 
       - name: serve + OpenAI-compat /v1 (the LM interface — MUST pass)
         run: |
           export PATH="$PWD/larql-src/target/release:$PATH"
           t0=$(date +%s)
-          larql serve ./gemma-q4k.vindex --port 8181 > /tmp/serve.log 2>&1 &
+          larql serve "$VINDEX_DIR" --port 8181 > /tmp/serve.log 2>&1 &
           ready=0
           for i in $(seq 1 240); do curl -fsS http://localhost:8181/v1/models >/dev/null 2>&1 && { ready=1; break; }; sleep 2; done
           t1=$(date +%s)
@@ -95,6 +98,6 @@ jobs:
           export PATH="$HOME/.local/bin:$PWD/larql-src/target/release:$PATH"
           goose --version || { echo "goose unavailable — babel's larql backend routes through goose; recording as gap"; exit 1; }
           out=$(LARQL_PORT=8181 LARQL_BIN="$PWD/larql-src/target/release/larql" LARQL_NO_CGROUP=1 GOOSE_BIN=goose \
-                bash bin/babel --backend larql --vindex "$PWD/gemma-q4k.vindex" "Reply with exactly one word: OK" 2>&1)
+                bash bin/babel --backend larql --vindex "$VINDEX_DIR" "Reply with exactly one word: OK" 2>&1)
           echo "$out"
           echo "- **bin/babel --backend larql**: $(echo "$out" | grep -o '{\"type\":\"babel_result\".*}' | head -1)" >> "$GITHUB_STEP_SUMMARY"
