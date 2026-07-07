@@ -34,6 +34,8 @@ jobs:
           - "qwen2.5:1.5b"
           - "qwen2.5:3b"
           - "qwen2.5-coder:7b"
+          - "qwen2.5-coder:0.5b"   # user's recommended coding default — is it agentic (structured tool_calls)?
+          - "qwen2.5-coder:1.5b"   # upgrade coder — tool-calling?
           - "llama3.2:3b"       # control: documented-strong ollama tool support
     steps:
       - uses: actions/checkout@v5
