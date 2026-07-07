@@ -78,7 +78,28 @@ Full log: ${LOG_FILE}
 
 Review with: python3 -m json.tool ${LOG_FILE} | less"
 
-python3 -c "
+# Zero-tool-call is a silent failure: the subagent deliberated but did no work.
+# Causes: (1) openrouter auto selected a non-tool-capable model,
+#         (2) the task is outside the coding agent's scope (e.g. ~/.claude/skills/),
+#         (3) the prompt contained a UI slash command (like /goal) that pi-agent
+#            cannot interpret, (4) a missing prerequisite (auth, env) was not surfaced.
+# In all cases: surface loudly so the user and the model both know delegation failed.
+if [ "${TOOLS_CALLED}" -eq 0 ] 2>/dev/null; then
+  WARN_MSG="⚠ pi-harness: subagent made 0 tool calls — no work was delegated.
+Possible causes: model selection failure (openrouter auto), task out of scope for coding agent (skill files live in ~/.claude/skills/, not in the repo), prompt contained a UI command (/goal, /skill-creator:) that pi-agent cannot interpret, or a missing prerequisite was not surfaced.
+Task (truncated): ${PROMPT:0:300}
+Full log: ${LOG_FILE}"
+  python3 -c "
+import json, sys
+print(json.dumps({
+  'systemMessage': sys.argv[1],
+  'hookSpecificOutput': {
+    'hookEventName': 'UserPromptSubmit',
+    'additionalContext': sys.argv[2]
+  }
+}))" "$WARN_MSG" "$CONTEXT"
+else
+  python3 -c "
 import json, sys
 print(json.dumps({
   'hookSpecificOutput': {
@@ -86,5 +107,6 @@ print(json.dumps({
     'additionalContext': sys.argv[1]
   }
 }))" "$CONTEXT"
+fi
 
 exit 0
