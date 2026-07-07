@@ -55,12 +55,8 @@ jobs:
       fail-fast: false
       matrix:
         cell:
-          - run-extract-abs        # control: run a local extracted vindex by abs path (expect hf:// 404)
-          - run-extract-link       # fix: extract -> link -> run by cache name
           - run-hf-gemma-f16       # does DIRECT run work on the f16 gemma vindex (serve 500'd)?
           - run-hf-granite-q4k     # direct run on published q4k vindex (serve hit Io NotFound)
-          - serve-hf-gemma-f16     # serve the f16 gemma + /v1, capture the REAL error body
-          - shannon-135m           # larql's own known-good recipe: shannon verify SmolLM2-135M
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -72,31 +68,4 @@ jobs:
         run: |
           set -x
           chmod +x bin/larql bin/larql-server || true
-          export PATH="$PWD/bin:$PATH"
-          set +e   # exploratory: run the whole sequence, don't abort mid-cell
-          SMOL="hf://HuggingFaceTB/SmolLM2-135M-Instruct"
-          Q="Reply with exactly one word: OK"
-          V="$GITHUB_WORKSPACE/v"
-          case "${{ matrix.cell }}" in
-            run-extract-abs)
-              larql extract "$SMOL" --output "$V"; echo "--- run by abs path ---"
-              larql run "$V" "$Q" -n 8 ;;
-            run-extract-link)
-              larql extract "$SMOL" --output "$V"; echo "--- link + list + run by name ---"
-              larql link "$V"; larql list
-              larql run SmolLM2-135M-Instruct "$Q" -n 8 ;;
-            run-hf-gemma-f16)
-              larql run hf://chrishayuk/gemma-3-4b-it-vindex "$Q" -n 8 ;;
-            run-hf-granite-q4k)
-              larql run hf://chrishayuk/granite-4.1-3b-q4k-vindex "$Q" -n 8 ;;
-            serve-hf-gemma-f16)
-              stdbuf -oL larql serve hf://chrishayuk/gemma-3-4b-it-vindex --port 8181 2>&1 | stdbuf -oL tee serve.log &
-              for i in $(seq 1 120); do curl -fsS http://localhost:8181/v1/models >/dev/null 2>&1 && break; sleep 2; done
-              curl -sS -w '\nHTTP %{http_code}\n' http://localhost:8181/v1/chat/completions \
-                -H 'content-type: application/json' \
-                -d '{"model":"m","messages":[{"role":"user","content":"'"$Q"'"}],"max_tokens":8}'
-              echo "--- serve.log ---"; tail -40 serve.log ;;
-            shannon-135m)
-              larql shannon verify "$SMOL" 2>&1 | head -50 ;;
-          esac
-          echo "=== cell ${{ matrix.cell }} exit=$? ==="
+          CELL="${{ matrix.cell }}" LARQL_BIN_DIR="$PWD/bin" bash scripts/larql_cell.sh
