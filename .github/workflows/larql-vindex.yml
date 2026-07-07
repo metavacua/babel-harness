@@ -85,8 +85,8 @@ jobs:
               # server-serveable Q4K (Q4_K q/k/o/gate/up, Q6_K v/down — Ollama-compatible) → the goal path
               /usr/bin/time -v larql extract "$SNAP" --output /tmp/model.vindex --quant q4k > /tmp/extract.log 2>&1 || echo "EXTRACT_FAIL rc=$?"
             else
-              # f16 (quant=none) → reproduces #253 on serve
-              /usr/bin/time -v larql convert safetensors-to-vindex "$SNAP" --output /tmp/model.vindex --f16 > /tmp/extract.log 2>&1 || echo "EXTRACT_FAIL rc=$?"
+              # f16 FULL vindex (--level all; plain convert defaults to browse=no weights) → reproduces #253 on serve
+              /usr/bin/time -v larql extract "$SNAP" --output /tmp/model.vindex --level all > /tmp/extract.log 2>&1 || echo "EXTRACT_FAIL rc=$?"
             fi
           else
             echo "no snapshot path parsed — dumping pull tail"; tail -5 /tmp/pull.log
@@ -112,9 +112,11 @@ jobs:
           SVPID=$!
           for i in $(seq 1 60); do curl -fsS http://localhost:8080/v1/models >/dev/null 2>&1 && break; sleep 1; done
           echo "--- /v1/models ---"; curl -s http://localhost:8080/v1/models | head -c 400; echo
-          echo "--- /v1/chat/completions (does the f16 chat route work? #253) ---"
+          MID=$(curl -s http://localhost:8080/v1/models | python3 -c 'import json,sys; d=json.load(sys.stdin).get("data") or []; print(d[0]["id"] if d else "")' 2>/dev/null)
+          echo "served model id: [$MID]"
+          echo "--- /v1/chat/completions (q4k should complete; f16 → #253 panic) ---"
           curl -s http://localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
-            -d '{"model":"testmodel","messages":[{"role":"user","content":"Reply with one word: OK"}],"max_tokens":8}' | head -c 800; echo
+            -d "{\"model\":\"$MID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with one word: OK\"}],\"max_tokens\":8}" | head -c 800; echo
           echo "--- serve log tail (panic on f16? #253) ---"; tail -25 /tmp/serve.log
           kill "$SVPID" 2>/dev/null || true
 

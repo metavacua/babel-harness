@@ -45,5 +45,13 @@ else
   echo "  SKIP: real vindex not present"
 fi
 
+# --- 6. Q4K layout: packed weights (interleaved_kquant, no up/down.bin) → must PASS (was a false positive) ---
+q="$tmp/q4k.vindex"; mkdir -p "$q"
+for f in embeddings.bin norms.bin attn_weights_kquant.bin interleaved_kquant.bin; do printf 'w' > "$q/$f"; done
+python3 -c "import json; json.dump([{'key':f'l{i}'} for i in range(20)], open('$q/weight_manifest.json','w'))"
+sum=$(sha256sum "$q/norms.bin" | cut -d' ' -f1)
+printf '{"checksums":{"norms.bin":"%s"},"num_layers":2,"has_model_weights":true,"quant":"q4k","extract_level":"all"}' "$sum" > "$q/index.json"
+python3 "$CHK" "$q" >/tmp/vc.out 2>&1 && ok "accepts a valid Q4K-layout vindex (interleaved_kquant, no up/down.bin)" || { bad "q4k vindex wrongly rejected"; cat /tmp/vc.out; }
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

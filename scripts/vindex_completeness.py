@@ -46,12 +46,23 @@ for fname, expected in checksums.items():
         if h.hexdigest() != expected:
             fails.append(f"checksum mismatch: {fname}")
 
-# 3. has_model_weights ⟹ the core weight bins must be present + non-zero
+# 3. has_model_weights ⟹ the core weight files must be present + non-zero.
+#    Layout is QUANT-AWARE: f16/none stores dense up/down bins; q4k packs them into
+#    interleaved_kquant.bin + attn_weights_kquant.bin (larql extract --quant q4k).
+def _nonempty(f):
+    fp = p(f); return os.path.exists(fp) and os.path.getsize(fp) > 0
 if idx.get("has_model_weights"):
-    for f in ("embeddings.bin", "norms.bin", "gate_vectors.bin", "up_weights.bin", "down_weights.bin"):
-        fp = p(f)
-        if not (os.path.exists(fp) and os.path.getsize(fp) > 0):
-            fails.append(f"has_model_weights=True but core weight file missing/empty: {f}")
+    quant = str(idx.get("quant") or "none").lower()
+    for f in ("embeddings.bin", "norms.bin"):          # side-channels, both layouts
+        if not _nonempty(f):
+            fails.append(f"has_model_weights=True but missing/empty side-channel: {f}")
+    if quant.startswith("q4"):                          # Q4K packed layout
+        need = [["attn_weights_kquant.bin"], ["interleaved_kquant.bin"]]
+    else:                                               # f16 / quant=none dense layout
+        need = [["attn_weights.bin"], ["up_weights.bin"], ["down_weights.bin"]]
+    for grp in need:
+        if not any(_nonempty(f) for f in grp):
+            fails.append(f"has_model_weights (quant={quant}) but no non-empty weight file among {grp}")
 
 # 4. weight_manifest tensor count vs num_layers — a wildly-short manifest = truncated extract (#201)
 nlayers = idx.get("num_layers", 0) or 0
