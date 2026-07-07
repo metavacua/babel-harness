@@ -9,6 +9,7 @@
 # Env: RUN_ID, FAILED_JOB (used in CI); OLLAMA_URL (default localhost:11434);
 #      DIAG_MODEL (default qwen2.5:1.5b). Test seams: DIAG_FAKE_LOG, DIAG_FAKE_MODEL.
 set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 DIAG_MODEL="${DIAG_MODEL:-qwen2.5:1.5b}"
 
@@ -16,12 +17,11 @@ DIAG_MODEL="${DIAG_MODEL:-qwen2.5:1.5b}"
 if [ -n "${DIAG_FAKE_LOG:-}" ]; then
   LOG="$DIAG_FAKE_LOG"
 else
-  LOG="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" \
-          --jq ".jobs[] | select(.conclusion==\"failure\") | .id" 2>/dev/null | while read -r jid; do
-            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${jid}/logs" 2>/dev/null | tail -60
-          done | tail -120)"
+  LOG="$(bash "$HERE/gh_fail_log.sh")"
 fi
 [ -n "$LOG" ] || LOG="(no failure log retrieved)"
+# persist for the fix step so it reuses this log instead of re-fetching (one fetch/run).
+[ -n "${GITHUB_WORKSPACE:-}" ] && printf '%s' "$LOG" > "$GITHUB_WORKSPACE/ci-fail-log.txt"
 
 # 2. ask the known-working local model (grounded, bounded).
 PROMPT="You are a CI debugger. From ONLY the failing CI log below, state the root cause in one sentence and the specific fix in one sentence. Do not invent details. LOG:
@@ -29,15 +29,7 @@ $LOG"
 if [ -n "${DIAG_FAKE_MODEL:-}" ]; then
   ANALYSIS="$DIAG_FAKE_MODEL"
 else
-  ANALYSIS="$(python3 - "$OLLAMA_URL" "$DIAG_MODEL" "$PROMPT" <<'PY'
-import json,sys,urllib.request
-url,model,prompt=sys.argv[1],sys.argv[2],sys.argv[3]
-body=json.dumps({"model":model,"prompt":prompt,"stream":False,"options":{"temperature":0}}).encode()
-req=urllib.request.Request(url+"/api/generate",data=body,headers={"Content-Type":"application/json"})
-try: print(json.load(urllib.request.urlopen(req,timeout=120)).get("response","(no response)"))
-except Exception as e: print(f"(diagnosis model call failed: {e})")
-PY
-)"
+  ANALYSIS="$(python3 "$HERE/ollama_generate.py" "$OLLAMA_URL" "$DIAG_MODEL" "$PROMPT" 120 "(no response)")"
 fi
 
 # 3. emit markdown.

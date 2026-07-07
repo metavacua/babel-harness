@@ -9,6 +9,7 @@
 # Seam: FIX_FAKE_DIFF bypasses the model.
 set -uo pipefail
 : "${FAIL_CMD:?}"; : "${TARGET_FILE:?}"; : "${FAIL_LOG:?}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"; DIAG_MODEL="${DIAG_MODEL:-qwen2.5:1.5b}"
 
 src="$(cat "$TARGET_FILE" 2>/dev/null || true)"
@@ -20,20 +21,12 @@ $FAIL_LOG
 
 --- $TARGET_FILE ---
 $src"
-  DIFF="$(python3 - "$OLLAMA_URL" "$DIAG_MODEL" "$PROMPT" <<'PY'
-import json,sys,urllib.request
-url,model,prompt=sys.argv[1],sys.argv[2],sys.argv[3]
-body=json.dumps({"model":model,"prompt":prompt,"stream":False,"options":{"temperature":0}}).encode()
-req=urllib.request.Request(url+"/api/generate",data=body,headers={"Content-Type":"application/json"})
-try: print(json.load(urllib.request.urlopen(req,timeout=180)).get("response",""))
-except Exception as e: print(f"(fix model call failed: {e})",file=sys.stderr)
-PY
-)"
+  DIFF="$(python3 "$HERE/ollama_generate.py" "$OLLAMA_URL" "$DIAG_MODEL" "$PROMPT" 180)"
 fi
 
 verdict=NOT-FIXED
 printf '%s\n' "$DIFF" > /tmp/fix.patch
-if git apply --check /tmp/fix.patch 2>/dev/null && git apply /tmp/fix.patch 2>/dev/null; then
+if git apply /tmp/fix.patch 2>/dev/null; then
   bash -c "$FAIL_CMD" >/tmp/rerun.log 2>&1 && verdict=FIXED
   git apply -R /tmp/fix.patch 2>/dev/null || true   # leave the tree clean; the patch is the artifact
 fi

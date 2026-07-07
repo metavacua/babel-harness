@@ -12,6 +12,7 @@ set -uo pipefail
 CELL="${CELL:?CELL required}"
 [ -n "${LARQL_BIN_DIR:-}" ] && export PATH="$LARQL_BIN_DIR:$PATH"
 Q="Reply with exactly one word: OK"
+marker='\bOK\b'   # success marker for every cell; override inside an arm only if one differs
 
 run() {  # echoes the command's combined output; returns its exit code
   if [ -n "${LARQL_FAKE_OUT:-}" ]; then printf '%s' "$LARQL_FAKE_OUT"; return "${LARQL_FAKE_RC:-0}"; fi
@@ -19,9 +20,9 @@ run() {  # echoes the command's combined output; returns its exit code
 }
 
 case "$CELL" in
-  selftest-ok)          out="$(run true)";               rc=$?; marker='\bOK\b' ;;
-  run-hf-granite-q4k)   out="$(run larql run hf://chrishayuk/granite-4.1-3b-q4k-vindex "$Q" -n 8)"; rc=$?; marker='\bOK\b' ;;
-  run-hf-gemma-f16)     out="$(run larql run hf://chrishayuk/gemma-3-4b-it-vindex "$Q" -n 8)";     rc=$?; marker='\bOK\b' ;;
+  selftest-ok)          out="$(run true)";               rc=$? ;;
+  run-hf-granite-q4k)   out="$(run larql run hf://chrishayuk/granite-4.1-3b-q4k-vindex "$Q" -n 8)"; rc=$? ;;
+  run-hf-gemma-f16)     out="$(run larql run hf://chrishayuk/gemma-3-4b-it-vindex "$Q" -n 8)";     rc=$? ;;
   *) echo "larql_cell: unknown cell: $CELL" >&2; exit 2 ;;
 esac
 echo "=== cell $CELL output ==="; printf '%s\n' "$out"

@@ -106,10 +106,9 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y libopenblas-dev
           chmod +x bin/larql bin/larql-server || true
-          FAIL_LOG="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" \
-            --jq '.jobs[] | select(.conclusion=="failure") | .id' 2>/dev/null | while read -r jid; do
-              gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${jid}/logs" 2>/dev/null | tail -60
-            done | tail -120)"
+          # reuse the log the diagnose step already fetched; fall back to a fresh fetch.
+          FAIL_LOG="$(cat "$GITHUB_WORKSPACE/ci-fail-log.txt" 2>/dev/null)"
+          [ -n "$FAIL_LOG" ] || FAIL_LOG="$(bash scripts/gh_fail_log.sh)"
           export FAIL_LOG
           export FAIL_CMD="CELL=run-hf-granite-q4k LARQL_BIN_DIR=$PWD/bin bash scripts/larql_cell.sh"
           export TARGET_FILE="scripts/larql_cell.sh"

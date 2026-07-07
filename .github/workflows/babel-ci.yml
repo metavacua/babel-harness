@@ -49,6 +49,15 @@ jobs:
       - name: pi-harness unit suite
         run: bash tests/test-pi-harness.bash | tee /tmp/pi.log
 
+      - name: larql-cell verdict suite
+        run: bash tests/test-larql-cell.bash | tee /tmp/larql-cell.log
+
+      - name: ci-diagnose suite
+        run: bash tests/test-ci-diagnose.bash | tee /tmp/ci-diagnose.log
+
+      - name: ci-fix suite
+        run: bash tests/test-ci-fix.bash | tee /tmp/ci-fix.log
+
       - name: deep-research-babel static guard
         run: bash .claude/skills/deep-research-babel/smoke.sh
 
@@ -58,7 +67,7 @@ jobs:
           {
             echo "## Hermetic gate"
             echo '```'
-            for f in /tmp/babel.log /tmp/coding.log /tmp/pi.log; do [ -f "$f" ] && tail -1 "$f"; done
+            for f in /tmp/babel.log /tmp/coding.log /tmp/pi.log /tmp/larql-cell.log /tmp/ci-diagnose.log /tmp/ci-fix.log; do [ -f "$f" ] && tail -1 "$f"; done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
