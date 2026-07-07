@@ -83,8 +83,13 @@ run_backend() {
         "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" >>"/tmp/babel-larql-${LARQL_PORT}.log" 2>&1 &
         local i=0; while [ "$i" -lt "$LARQL_READY_TRIES" ] && ! _larql_ready; do sleep 0.2; i=$((i+1)); done
       fi
+      # the server registers the model under the id from the vindex's index.json (often a
+      # snapshot SHA), NOT the vindex basename — query /v1/models so Goose targets the right one.
+      local mid; mid="$(curl -sf "http://localhost:${LARQL_PORT}/v1/models" 2>/dev/null \
+        | python3 -c 'import json,sys; d=(json.load(sys.stdin).get("data") or [{}]); print(d[0].get("id",""))' 2>/dev/null)"
+      [ -z "$mid" ] && mid="$LARQL_VINDEX"
       RB_OUT="$(GOOSE_PROVIDER=openai OPENAI_BASE_URL="http://localhost:${LARQL_PORT}/v1" OPENAI_API_KEY=larql \
-               GOOSE_MODEL="$LARQL_VINDEX" GOOSE_MODE=auto "$GOOSE_BIN" run -t "$task" 2>&1)" || RB_RC=$? ;;
+               GOOSE_MODEL="$mid" GOOSE_MODE=auto "$GOOSE_BIN" run -t "$task" 2>&1)" || RB_RC=$? ;;
     *) RB_OUT="babel: unknown backend $b"; RB_RC=2 ;;
   esac
 }

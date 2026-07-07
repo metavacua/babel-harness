@@ -120,6 +120,23 @@ jobs:
           echo "--- serve log tail (panic on f16? #253) ---"; tail -25 /tmp/serve.log
           kill "$SVPID" 2>/dev/null || true
 
+      - name: THE GOAL — a vindex DRIVES babel (q4k serveable path; Goose over larql /v1)
+        if: matrix.format == 'q4k'
+        run: |
+          set -x
+          # install Goose — babel's larql-backend agent
+          curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash || echo "GOOSE_INSTALL_FAIL"
+          export PATH="$HOME/.local/bin:$PWD/bin:$PATH"
+          command -v goose && goose --version 2>&1 | head -1 || echo "goose not on PATH"
+          # bin/babel --backend larql: serves the vindex + drives Goose at its /v1 (model id auto-resolved)
+          OPENROUTER_CHECK_URL="http://127.0.0.1:1/none" LARQL_BIN="$PWD/bin/larql" LARQL_PORT=8080 \
+            bin/babel --backend larql --vindex /tmp/model.vindex "Reply with exactly the word OK" \
+            > /tmp/babel-larql.out 2> /tmp/babel-larql.err || true
+          echo "=== babel envelope (stdout) ==="; cat /tmp/babel-larql.out
+          echo "=== backend chatter (stderr tail) ==="; tail -30 /tmp/babel-larql.err
+          { echo "## THE GOAL: vindex drives babel — ${{ matrix.model }} (q4k)";
+            echo "- envelope: \`$(cat /tmp/babel-larql.out)\`"; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: on ERROR — the REAL babel harness debugs the failure in CI
         if: failure()
         run: |
