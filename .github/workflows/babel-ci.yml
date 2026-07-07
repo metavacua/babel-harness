@@ -52,6 +52,9 @@ jobs:
       - name: larql-cell verdict suite
         run: bash tests/test-larql-cell.bash | tee /tmp/larql-cell.log
 
+      - name: vindex-completeness checker suite (independent rejection power)
+        run: bash tests/test-vindex-completeness.bash | tee /tmp/vindex-completeness.log
+
       - name: deep-research-babel static guard
         run: bash .claude/skills/deep-research-babel/smoke.sh
 
@@ -61,7 +64,7 @@ jobs:
           {
             echo "## Hermetic gate"
             echo '```'
-            for f in /tmp/babel.log /tmp/coding.log /tmp/pi.log /tmp/larql-cell.log; do [ -f "$f" ] && tail -1 "$f"; done
+            for f in /tmp/babel.log /tmp/coding.log /tmp/pi.log /tmp/larql-cell.log /tmp/vindex-completeness.log; do [ -f "$f" ] && tail -1 "$f"; done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
