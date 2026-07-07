@@ -34,25 +34,32 @@ jobs:
         with:
           node-version: "22"
 
-      - name: install the Pi coding agent (babel's pi backend)
+      - name: install the Pi coding agent (babel's pi backend — pinned to the known-working version)
         run: |
           set -x
-          npm install -g @earendil-works/pi-coding-agent
+          # 0.75.4 supports `--provider ollama`; npm latest (0.80.3) regressed it to "Unknown provider ollama".
+          npm install -g @earendil-works/pi-coding-agent@0.75.4
           command -v pi && pi --version 2>&1 | head -3 || { echo "PI NOT INSTALLED / NOT ON PATH"; exit 1; }
 
-      - name: install + serve ollama, pull the light model
+      - name: install + serve ollama, pull a pi-recognized model
         run: |
           set -x
           curl -fsSL https://ollama.com/install.sh | sh
           nohup ollama serve >/tmp/ollama.log 2>&1 &
           for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
-          ollama pull qwen2.5:0.5b
+          # phi3:mini is a model pi's ollama provider recognizes (qwen2.5:0.5b is not listed).
+          ollama pull phi3:mini
           ollama list
+
+      - name: diagnostic — does pi see the ollama model? (pi discovers from the live ollama)
+        run: |
+          set -x
+          pi --list-models 2>&1 | grep -i ollama || echo "WARN: pi lists no ollama models"
 
       - name: run the REAL babel harness on the local model (no cloud)
         env:
           OPENROUTER_CHECK_URL: "http://127.0.0.1:1/none"   # force no cloud provider
-          OLLAMA_MODEL: "qwen2.5:0.5b"
+          OLLAMA_MODEL: "phi3:mini"
         run: |
           set -x
           export PATH="$PWD/bin:$PATH"
