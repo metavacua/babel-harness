@@ -58,6 +58,7 @@ jobs:
           - run-hf-gemma-f16       # does DIRECT run work on the f16 gemma vindex (serve 500'd)?
           - run-hf-granite-q4k     # direct run on published q4k vindex (serve hit Io NotFound)
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           name: larql-bins

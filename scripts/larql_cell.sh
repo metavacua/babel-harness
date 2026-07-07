@@ -14,17 +14,16 @@ CELL="${CELL:?CELL required}"
 Q="Reply with exactly one word: OK"
 
 run() {  # echoes the command's combined output; returns its exit code
-  if [ -n "${LARQL_FAKE_OUT:-}" ]; then printf '%s' "$LARQL_FAKE_OUT"; return 0; fi
+  if [ -n "${LARQL_FAKE_OUT:-}" ]; then printf '%s' "$LARQL_FAKE_OUT"; return "${LARQL_FAKE_RC:-0}"; fi
   "$@" 2>&1
 }
 
 case "$CELL" in
-  selftest-ok)          out="$(run true)";               marker='OK' ;;
-  run-hf-granite-q4k)   out="$(run larql run hf://chrishayuk/granite-4.1-3b-q4k-vindex "$Q" -n 8)"; marker='OK' ;;
-  run-hf-gemma-f16)     out="$(run larql run hf://chrishayuk/gemma-3-4b-it-vindex "$Q" -n 8)";     marker='OK' ;;
+  selftest-ok)          out="$(run true)";               rc=$?; marker='\bOK\b' ;;
+  run-hf-granite-q4k)   out="$(run larql run hf://chrishayuk/granite-4.1-3b-q4k-vindex "$Q" -n 8)"; rc=$?; marker='\bOK\b' ;;
+  run-hf-gemma-f16)     out="$(run larql run hf://chrishayuk/gemma-3-4b-it-vindex "$Q" -n 8)";     rc=$?; marker='\bOK\b' ;;
   *) echo "larql_cell: unknown cell: $CELL" >&2; exit 2 ;;
 esac
-rc=$?
 echo "=== cell $CELL output ==="; printf '%s\n' "$out"
 if [ "$rc" -ne 0 ] || ! printf '%s' "$out" | grep -qiE "$marker"; then
   echo "=== cell $CELL VERDICT: FAIL (rc=$rc, marker '/$marker/' not found) ==="
