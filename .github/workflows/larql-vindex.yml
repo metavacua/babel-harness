@@ -1,0 +1,140 @@
+# larql-vindex — the critical path to a larql-powered coding agent:
+#   build larql → extract a model to a vindex → COMPLETENESS GATE → serve →
+#   hit /v1/chat/completions (reproduce #253 f16 chat panic) → probe tool-calls.
+#
+# This is both the extract-path test bench (correctness of vindex formation) and
+# the "vindex drives babel" path (larql serve /v1 is what babel's larql backend
+# consumes). Every cell captures resources (/usr/bin/time -v) for the OOM issues
+# (#178/#239/#180). Findings → issues/PRs to metavacua/larql-to-sparql.
+name: larql-vindex
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/larql-vindex.yml"
+      - "scripts/vindex_completeness.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: larql-vindex-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build larql-cli + larql-server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: metavacua/larql-to-sparql
+      - run: sudo apt-get update && sudo apt-get install -y libopenblas-dev pkg-config
+      - name: build (timed)
+        run: |
+          set -x; t0=$(date +%s)
+          stdbuf -oL -eL cargo build --release -p larql-cli -p larql-server 2>&1 | stdbuf -oL tail -20
+          echo "## larql build: $(( $(date +%s)-t0 ))s" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: larql-bins
+          path: |
+            target/release/larql
+            target/release/larql-server
+          retention-days: 1
+
+  extract-serve:
+    name: "extract→gate→serve: ${{ matrix.model }} (${{ matrix.format }})"
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - "HuggingFaceTB/SmolLM2-135M"
+          - "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+        format:
+          - "f16"    # reproduces #253 (server chat panics on quant=none)
+          - "q4k"    # the goal path: server-serveable Q4K vindex → drives babel
+    steps:
+      - uses: actions/checkout@v5          # babel-harness — for scripts/vindex_completeness.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: larql-bins
+          path: bin
+      - name: runtime deps + perms
+        run: |
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev time
+          chmod +x bin/larql bin/larql-server || true
+
+      - name: model pull + extract → vindex (streamed, resource-tracked)
+        env:
+          MODEL: ${{ matrix.model }}
+          FMT: ${{ matrix.format }}
+        run: |
+          set -x
+          export PATH="$PWD/bin:$PATH"
+          # 1. pull the model into the HF cache; capture the snapshot path it prints
+          larql model pull "$MODEL" 2>&1 | tee /tmp/pull.log | tail -25 || echo "PULL_FAIL rc=$?"
+          SNAP=$(grep -aoE 'Downloaded to: .*' /tmp/pull.log | sed 's/Downloaded to: //' | tail -1)
+          echo "snapshot=[$SNAP]"
+          # 2. extract → vindex. INPUT is POSITIONAL (larql's own model-pull hint wrongly says --input).
+          if [ -n "$SNAP" ]; then
+            if [ "$FMT" = "q4k" ]; then
+              # server-serveable Q4K (Q4_K q/k/o/gate/up, Q6_K v/down — Ollama-compatible) → the goal path
+              /usr/bin/time -v larql extract "$SNAP" --output /tmp/model.vindex --quant q4k > /tmp/extract.log 2>&1 || echo "EXTRACT_FAIL rc=$?"
+            else
+              # f16 FULL vindex (--level all; plain convert defaults to browse=no weights) → reproduces #253 on serve
+              /usr/bin/time -v larql extract "$SNAP" --output /tmp/model.vindex --level all > /tmp/extract.log 2>&1 || echo "EXTRACT_FAIL rc=$?"
+            fi
+          else
+            echo "no snapshot path parsed — dumping pull tail"; tail -5 /tmp/pull.log
+          fi
+          echo "--- extract tail ---"; tail -30 /tmp/extract.log 2>/dev/null
+          echo "--- peak RSS ---"; grep -aE 'Maximum resident' /tmp/extract.log 2>/dev/null
+          ls -la /tmp/model.vindex 2>&1 | head -20
+
+      - name: COMPLETENESS GATE (independent rejection power larql verify lacks)
+        run: |
+          if [ -d /tmp/model.vindex ]; then
+            python3 scripts/vindex_completeness.py /tmp/model.vindex --no-checksum || echo "COMPLETENESS_FAIL"
+          else
+            echo "no vindex produced — extract failed upstream"; exit 1
+          fi
+
+      - name: serve + hit chat route (the #253 f16 panic test) + tool-call probe
+        run: |
+          set -x
+          export PATH="$PWD/bin:$PATH"
+          larql link /tmp/model.vindex --as testmodel 2>&1 | tail -3 || true
+          nohup larql serve /tmp/model.vindex --port 8080 >/tmp/serve.log 2>&1 &
+          SVPID=$!
+          for i in $(seq 1 60); do curl -fsS http://localhost:8080/v1/models >/dev/null 2>&1 && break; sleep 1; done
+          echo "--- /v1/models ---"; curl -s http://localhost:8080/v1/models | head -c 400; echo
+          MID=$(curl -s http://localhost:8080/v1/models | python3 -c 'import json,sys; d=json.load(sys.stdin).get("data") or []; print(d[0]["id"] if d else "")' 2>/dev/null)
+          echo "served model id: [$MID]"
+          echo "--- /v1/chat/completions (q4k should complete; f16 → #253 panic) ---"
+          curl -s http://localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
+            -d "{\"model\":\"$MID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with one word: OK\"}],\"max_tokens\":8}" | head -c 800; echo
+          echo "--- serve log tail (panic on f16? #253) ---"; tail -25 /tmp/serve.log
+          kill "$SVPID" 2>/dev/null || true
+
+      - name: on ERROR — the REAL babel harness debugs the failure in CI
+        if: failure()
+        run: |
+          set -x
+          # provision babel's working local backend (base qwen2.5:0.5b emits structured tool calls, PR #23)
+          npm install -g @earendil-works/pi-coding-agent@0.75.4 || true
+          mkdir -p ~/.pi/agent && cp config/pi-models.json ~/.pi/agent/models.json
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          ollama pull qwen2.5:0.5b
+          # feed the failing larql logs to the ACTUAL bin/babel (not a curl fake)
+          LOG="$(tail -40 /tmp/extract.log /tmp/serve.log /tmp/pull.log 2>/dev/null | head -c 3000)"
+          export PATH="$PWD/bin:$PATH"
+          OPENROUTER_CHECK_URL="http://127.0.0.1:1/none" OLLAMA_MODEL="qwen2.5:0.5b" \
+            bin/babel --backend ollama "A larql CI step failed. From this log, state the root cause and the fix concisely: $LOG" \
+            2>&1 | tee /tmp/babel-diag.log | tail -30 || true
+          { echo "## babel on-error diagnosis (REAL harness, qwen2.5:0.5b)"; echo '```'; tail -25 /tmp/babel-diag.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

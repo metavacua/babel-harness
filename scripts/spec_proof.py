@@ -127,6 +127,26 @@ def _check_lql_larql_vindex() -> tuple[bool, str]:
     return rc == 0 and found, f"exit={rc} larql-vindex_found={'yes' if found else 'no'}"
 
 
+def _interpret_coding_agent_test_output(rc: int, out: str) -> tuple[bool, str]:
+    """
+    Pure decision logic, isolated from subprocess execution so it's unit-testable.
+
+    Checks the durable invariant (suite exits 0, at least one test ran, zero
+    failures) rather than a specific historical test count — a hardcoded count
+    is guaranteed to go stale the moment a new test is legitimately added.
+    """
+    results_line = re.search(r'Results:.*', out)
+    evidence = f"exit={rc} " + (results_line.group() if results_line else "no Results line")
+    passed_match = re.search(r'Results:\s*(\d+)\s+passed,\s*0\s+failed', out)
+    passed_count = int(passed_match.group(1)) if passed_match else 0
+    return rc == 0 and passed_count > 0, evidence
+
+
+def _check_coding_agent_tests() -> tuple[bool, str]:
+    rc, out, _err = _run(["bash", str(REPO / "tests/test-coding-agent.bash")])
+    return _interpret_coding_agent_test_output(rc, out)
+
+
 CLAIMS = [
     # ── Structural claims (code / file artifacts) ────────────────────────────
 
@@ -201,10 +221,7 @@ CLAIMS = [
     ("B2",
      "test-coding-agent.bash: all 41 tests pass",
      "spec — '41 existing tests pass'",
-     lambda: (lambda rc, out, err: (
-         rc == 0 and "41 passed" in out,
-         f"exit={rc} " + (re.search(r'Results:.*', out) or re.compile('.')).group()
-     ))(*_run(["bash", str(REPO / "tests/test-coding-agent.bash")]))),
+     _check_coding_agent_tests),
 
     ("B3",
      "github_graph.py --output lql: generates INSERT triples for chrishayuk/larql",
