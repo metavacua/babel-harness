@@ -52,12 +52,12 @@ jobs:
           curl -fsSL https://ollama.com/install.sh | sh
           nohup ollama serve >/tmp/ollama.log 2>&1 &
           for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
-          ollama pull qwen2.5-coder:7b
+          ollama pull qwen2.5:0.5b
 
       - name: babel performs the self-development task (real harness)
         env:
           OPENROUTER_CHECK_URL: "http://127.0.0.1:1/none"
-          OLLAMA_MODEL: "qwen2.5-coder:7b"
+          OLLAMA_MODEL: "qwen2.5:0.5b"
           TASK: ${{ github.event.inputs.task || 'Create ONE new file docs/babel-backends.md documenting bin/babel''s backends (pi, goose, larql, ollama) and its degradation chain, based on reading bin/babel. Create only that file; do not modify any existing file.' }}
         run: |
           set -x
