@@ -93,3 +93,29 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           FAILED_JOB: "babel-larql-matrix / test"
         run: bash scripts/ci_diagnose.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: larql-bins
+          path: bin
+      - name: attempt fix in the ephemeral runner (record only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev
+          chmod +x bin/larql bin/larql-server || true
+          FAIL_LOG="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" \
+            --jq '.jobs[] | select(.conclusion=="failure") | .id' 2>/dev/null | while read -r jid; do
+              gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${jid}/logs" 2>/dev/null | tail -60
+            done | tail -120)"
+          export FAIL_LOG
+          export FAIL_CMD="CELL=run-hf-granite-q4k LARQL_BIN_DIR=$PWD/bin bash scripts/larql_cell.sh"
+          export TARGET_FILE="scripts/larql_cell.sh"
+          bash scripts/ci_fix.sh || true   # NOT-FIXED is a recorded outcome, not a job failure
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: babel-local-fix
+          path: artifact/
+          retention-days: 3
