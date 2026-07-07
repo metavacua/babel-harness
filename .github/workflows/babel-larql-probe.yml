@@ -32,6 +32,11 @@ jobs:
           repository: metavacua/larql-to-sparql
           path: larql-src
 
+      # larql-cli links against OpenBLAS (its BLAS matmul backend) — not on the
+      # runner by default. (Discovered by the first probe run: `-lopenblas` link error.)
+      - name: install build deps (OpenBLAS)
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev pkg-config
+
       # No cargo cache on purpose: this probe MEASURES the cold build time, and
       # avoids a third-party action. (Add a SHA-pinned cache later if larql
       # becomes a permanent matrix backend.)
