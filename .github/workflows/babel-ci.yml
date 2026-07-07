@@ -20,6 +20,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   hermetic:
     name: hermetic gate (mock, no secrets)
@@ -37,13 +41,13 @@ jobs:
           exit $rc
 
       - name: babel acceptance spec (14 assertions)
-        run: bash tests/test-babel.bash
+        run: bash tests/test-babel.bash | tee /tmp/babel.log
 
       - name: coding-agent unit suite
-        run: bash tests/test-coding-agent.bash
+        run: bash tests/test-coding-agent.bash | tee /tmp/coding.log
 
       - name: pi-harness unit suite
-        run: bash tests/test-pi-harness.bash
+        run: bash tests/test-pi-harness.bash | tee /tmp/pi.log
 
       - name: deep-research-babel static guard
         run: bash .claude/skills/deep-research-babel/smoke.sh
@@ -54,13 +58,13 @@ jobs:
           {
             echo "## Hermetic gate"
             echo '```'
-            bash tests/test-babel.bash 2>/dev/null | tail -1 || true
-            bash tests/test-coding-agent.bash 2>/dev/null | tail -1 || true
+            for f in /tmp/babel.log /tmp/coding.log /tmp/pi.log; do [ -f "$f" ] && tail -1 "$f"; done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
   probe-ollama:
     name: probe — is Ollama usable on a runner?
+    if: github.event_name == 'workflow_dispatch'   # one-time feasibility check, not per-PR
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -87,6 +91,7 @@ jobs:
 
   probe-weights:
     name: probe — can a runner pull open weights from HuggingFace?
+    if: github.event_name == 'workflow_dispatch'   # one-time feasibility check, not per-PR
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

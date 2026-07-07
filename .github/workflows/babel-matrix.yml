@@ -12,10 +12,17 @@ name: babel-matrix
 
 on:
   pull_request:
+    paths:
+      - ".github/workflows/babel-matrix.yml"
+      - "scripts/babel_matrix_cell.sh"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   matrix:
