@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** When a babel-harness CI job fails, a *known-working* babel-local model (Ollama `qwen2.5:1.5b`) reads the failing step's log plus the diff and posts a grounded root-cause diagnosis + suggested fix to the run — turning opaque CI failures into actionable analysis, and dogfooding babel-local as a debugging agent (the working model debugging the broken larql path).
+**Goal:** When a babel-harness CI job fails, a *known-working* babel-local model (Ollama `qwen2.5:1.5b`) runs **as a debugging coding agent inside the failed run's ephemeral runner** — it reads the failure, diagnoses it, applies a candidate fix to the runner's own checkout, re-runs the failing command to verify, and **records the outcome (diagnosis + verified patch + proof) as CI output.** Nothing is pushed; the VM is destroyed. The record is what a human reviews to decide whether to apply the fix. Dogfoods babel-local as a debugger (the working model fixing the broken larql path).
 
-**Architecture:** A `diagnose` job gated on `if: failure()` runs after the test jobs, installs Ollama + pulls the proven `qwen2.5:1.5b`, fetches the failed job's log via the GitHub API, and prompts the local model for a one-paragraph diagnosis, written to `$GITHUB_STEP_SUMMARY`. Prerequisite: CI jobs must *actually fail* on error — today `babel-larql-matrix` is falsely green (`set +e` + trailing `echo exit=$?`), so step 1 restores rejection power by moving cell logic to a committed script that exits non-zero on a missing token.
+**Architecture:** An `if: failure()` job runs after the test jobs on a fresh runner, installs Ollama + pulls the proven `qwen2.5:1.5b`, and drives a **decomposed** agent loop: (a) fetch the failing step's log; (b) grounded single-shot — model states root cause + a concrete patch; (c) the *harness* (bash, not the model) applies the patch to the checkout and re-runs the exact failing command; (d) record diagnosis + patch + whether the re-run passed to `$GITHUB_STEP_SUMMARY` and an uploaded artifact. **Ephemerality is the safety boundary** — the agent may edit and run anything in the disposable VM; only the recorded artifact escapes. The hard part is *reliability*, not safety, so each model step is bounded/grounded (the regime a small local model is reliable in) and the harness owns orchestration + verification. Prerequisite: CI jobs must *actually fail* on error — today `babel-larql-matrix` is falsely green (`set +e` + trailing `echo exit=$?`), so Task 1 restores rejection power by moving cell logic to a committed script that exits non-zero on a missing token.
 
 **Tech Stack:** GitHub Actions, Ollama (`qwen2.5:1.5b`), `gh`/GitHub REST API, bash, `jq`/`python3`.
 
@@ -303,14 +303,137 @@ Expected: the diagnose job ran (conclusion `success`), and its summary holds the
 
 ---
 
-## Out of scope for this plan (next spec: "self-healing — propose & apply fix")
+### Task 4: Debug-and-fix in the ephemeral runner — apply a candidate fix, verify, record
 
-This plan delivers **diagnosis** (the safe, grounded, immediately-buildable rung). The **debug/fix** rungs the directive also names need their own spec because they carry real design and safety decisions that must not be hand-waved:
+The runner is a disposable sandbox: the agent may edit and re-run anything; only the recorded artifact survives. So there is **no push, no PR write, no autonomy guardrail** — the "legal-move" check is simply *did re-running the failing command with the patch pass?*, done in the VM, and its answer is recorded. A human reads the recorded verified patch and applies it if they want.
 
-- **Propose fix** as a unified diff (still read-only; post to summary/PR) — needs a constrained output format and a way to validate the diff applies.
-- **Apply fix + re-verify** — a local model editing the working tree and pushing to a PR is an autonomy/safety boundary: guardrails (only on trusted/non-fork PRs, restricted path allow-list, mandatory re-run-must-pass gate, human approval to merge), and the AlphaZero "legal move" checker (a proposed fix is only accepted if the previously-failing cell then passes) belong there.
+**Files:**
+- Create: `scripts/ci_fix.sh`
+- Modify: `.github/workflows/babel-larql-matrix.yml` (extend the `diagnose` job to run the fix loop and upload the artifact)
 
-These build directly on Task 3's diagnosis output and the Task 1 rejection-power gate.
+**Interfaces:**
+- Consumes: `FAIL_CMD` (the exact command to re-run to verify), `TARGET_FILE` (the file the model may patch), `FAIL_LOG`, a local Ollama with `qwen2.5:1.5b`.
+- Produces: `scripts/ci_fix.sh` — writes `## babel-local debug-and-fix` markdown (diagnosis + diff + `verified: FIXED|NOT-FIXED`) to `$GITHUB_STEP_SUMMARY` and `artifact/proposed-fix.patch`; exits 0 iff the re-run passed.
+
+- [ ] **Step 1: Write the failing test** (fix-loop logic with the model faked and a trivially-fixable target)
+
+```bash
+# tests/test-ci-fix.bash
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"; PASS=0; FAIL=0
+ok(){ echo "  PASS: $1"; ((PASS++))||true; }; bad(){ echo "  FAIL: $1"; ((FAIL++))||true; }
+tmp="$(mktemp -d)"; cd "$tmp"; git init -q; git config user.email t@t; git config user.name t
+printf 'exit 1\n' > cmd.sh; git add cmd.sh; git commit -qm init      # FAIL_CMD fails until patched
+DIFF="$(printf -- '--- a/cmd.sh\n+++ b/cmd.sh\n@@ -1 +1 @@\n-exit 1\n+exit 0\n')"
+out="$(FIX_FAKE_DIFF="$DIFF" FAIL_CMD='bash cmd.sh' TARGET_FILE='cmd.sh' FAIL_LOG='cmd failed' \
+       bash "$ROOT/scripts/ci_fix.sh" 2>/dev/null)"; rc=$?
+echo "$out" | grep -qi 'verified: \*\*FIXED\*\*' && ok "records FIXED when re-run passes" || bad "no FIXED"
+[ "$rc" -eq 0 ] && ok "exits 0 when fix verified" || bad "expected exit 0"
+[ -f artifact/proposed-fix.patch ] && ok "records the patch artifact" || bad "no artifact"
+echo "== $PASS passed, $FAIL failed =="; [ "$FAIL" -eq 0 ]
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `bash tests/test-ci-fix.bash`
+Expected: FAIL — `scripts/ci_fix.sh: No such file or directory`.
+
+- [ ] **Step 3: Write minimal implementation**
+
+```bash
+# scripts/ci_fix.sh
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Ephemeral-VM debug-and-fix: ask the known-working babel-local model for a
+# unified diff that fixes FAIL_CMD, apply it to THIS runner's checkout, re-run
+# FAIL_CMD, and RECORD the patch + whether it now passes. Nothing is pushed; the
+# disposable runner is the sandbox, the recorded artifact is the only survivor.
+# Env: FAIL_CMD, TARGET_FILE, FAIL_LOG (required); OLLAMA_URL, DIAG_MODEL.
+# Seam: FIX_FAKE_DIFF bypasses the model.
+set -uo pipefail
+: "${FAIL_CMD:?}"; : "${TARGET_FILE:?}"; : "${FAIL_LOG:?}"
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"; DIAG_MODEL="${DIAG_MODEL:-qwen2.5:1.5b}"
+
+src="$(cat "$TARGET_FILE" 2>/dev/null || true)"
+if [ -n "${FIX_FAKE_DIFF:-}" ]; then
+  DIFF="$FIX_FAKE_DIFF"
+else
+  PROMPT="A CI command failed. Output ONLY a unified diff (git apply format) against $TARGET_FILE that fixes it — no prose. LOG:
+$FAIL_LOG
+
+--- $TARGET_FILE ---
+$src"
+  DIFF="$(python3 - "$OLLAMA_URL" "$DIAG_MODEL" "$PROMPT" <<'PY'
+import json,sys,urllib.request
+url,model,prompt=sys.argv[1],sys.argv[2],sys.argv[3]
+body=json.dumps({"model":model,"prompt":prompt,"stream":False,"options":{"temperature":0}}).encode()
+req=urllib.request.Request(url+"/api/generate",data=body,headers={"Content-Type":"application/json"})
+try: print(json.load(urllib.request.urlopen(req,timeout=180)).get("response",""))
+except Exception as e: print(f"(fix model call failed: {e})",file=sys.stderr)
+PY
+)"
+fi
+
+verdict=NOT-FIXED
+printf '%s\n' "$DIFF" > /tmp/fix.patch
+if git apply --check /tmp/fix.patch 2>/dev/null && git apply /tmp/fix.patch 2>/dev/null; then
+  bash -c "$FAIL_CMD" >/tmp/rerun.log 2>&1 && verdict=FIXED
+  git apply -R /tmp/fix.patch 2>/dev/null || true   # leave the tree clean; the patch is the artifact
+fi
+
+mkdir -p artifact; printf '%s\n' "$DIFF" > artifact/proposed-fix.patch
+REPORT="## babel-local debug-and-fix (qwen2.5:1.5b, ephemeral)
+- verified: **$verdict** (re-ran \`$FAIL_CMD\`)
+\`\`\`diff
+$DIFF
+\`\`\`
+<sub>Produced and verified in the disposable runner; nothing pushed. Apply \`artifact/proposed-fix.patch\` manually if the fix is good.</sub>"
+printf '%s\n' "$REPORT"
+[ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+[ "$verdict" = "FIXED" ]
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `bash tests/test-ci-fix.bash`
+Expected: PASS — `== 3 passed, 0 failed ==`.
+
+- [ ] **Step 5: Wire the fix loop into the diagnose job + upload the artifact**
+
+In `.github/workflows/babel-larql-matrix.yml`, in the `diagnose` job (Task 3), after the diagnosis step add:
+
+```yaml
+      - name: attempt fix in the ephemeral runner (record only)
+        env:
+          FAIL_CMD: "CELL=run-hf-granite-q4k LARQL_BIN_DIR=$PWD/bin bash scripts/larql_cell.sh"
+          TARGET_FILE: "scripts/larql_cell.sh"
+          FAIL_LOG: ${{ ' ' }}   # populated from the diagnosis step's captured log in a real wire-up
+        run: bash scripts/ci_fix.sh || true   # NOT-FIXED is a recorded outcome, not a job failure
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: babel-local-fix
+          path: artifact/
+          retention-days: 3
+```
+
+- [ ] **Step 6: Commit and verify in CI**
+
+```bash
+git add scripts/ci_fix.sh tests/test-ci-fix.bash .github/workflows/babel-larql-matrix.yml
+git commit -m "ci: ephemeral debug-and-fix — babel-local proposes+verifies a patch, records it (no push)"
+git push
+```
+Verify: on the next failing `babel-larql-matrix` run, the `diagnose` job's summary shows the `## babel-local debug-and-fix` block with a diff and a `verified:` verdict, and a `babel-local-fix` artifact is uploaded holding `proposed-fix.patch`. Nothing was pushed to the branch.
+
+---
+
+## Notes on reliability (not safety)
+
+The only real risk is the small model producing a bad/empty diff. That is *contained*: `ci_fix.sh` records `NOT-FIXED` and the un-applied patch, and a `NOT-FIXED` outcome is still a useful record (the diagnosis stands). Improve reliability by decomposition, not a bigger model — e.g., have the model first name the single line to change (grounded), then emit the diff for just that line; keep `TARGET_FILE` small and specific. The "does it actually work" gate is the re-run in the VM, which the harness (not the model) owns.
 
 ## Self-Review
 
