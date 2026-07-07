@@ -18,6 +18,15 @@
           "modelFamily": "qwen2",
           "contextLength": 32768,
           "estimatedSize": { "gpu": 500000000, "cpu": 500000000 }
+        },
+        {
+          "id": "qwen2.5-coder:7b",
+          "reasoning": false,
+          "parameterSize": "7B",
+          "quantizationLevel": "Q4_K_M",
+          "modelFamily": "qwen2",
+          "contextLength": 32768,
+          "estimatedSize": { "gpu": 4685000000, "cpu": 4685000000 }
         }
       ]
     }
