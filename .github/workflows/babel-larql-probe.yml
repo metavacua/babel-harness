@@ -1,0 +1,69 @@
+# larql local-provisioning probe — can a GitHub runner build larql-cli from
+# source, pull a vindex from HuggingFace, and run one-shot inference on it?
+# MEASURES every stage (cold build, pull+size, inference latency).
+#
+# Uses larql-cli `larql run` (one-shot), NOT larql-server: the server exists only
+# for the OpenAI-compat HTTP layer that Goose/babel route through; a matrix cell
+# that runs a grounded prompt and grades the answer needs neither server nor port.
+# Heavy build (~<20min historically) — runs only when this file changes or on
+# manual dispatch. Timeout well under GitHub's 6h cap.
+name: babel-larql-probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/babel-larql-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  larql:
+    name: build larql-cli + pull vindex + run (timed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # < 6h
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: checkout larql source (public)
+        uses: actions/checkout@v5
+        with:
+          repository: metavacua/larql-to-sparql
+          path: larql-src
+
+      # No cargo cache on purpose: this probe MEASURES the cold build time, and
+      # avoids a third-party action. (Add a SHA-pinned cache later if larql
+      # becomes a permanent matrix backend.)
+      - name: build larql-cli (cold Rust build, TIMED)
+        working-directory: larql-src
+        run: |
+          t0=$(date +%s)
+          cargo build --release -p larql-cli 2>&1 | tail -25
+          t1=$(date +%s)
+          echo "## larql-cli probe" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **build (larql-cli, cold)**: $((t1-t0))s" >> "$GITHUB_STEP_SUMMARY"
+          ls -la target/release/larql
+
+      - name: pull vindex from HuggingFace (TIMED + sized)
+        run: |
+          export PATH="$PWD/larql-src/target/release:$PATH"
+          df -h / | sed 's/^/before-pull: /'
+          t0=$(date +%s)
+          larql pull hf://chrishayuk/gemma-3-4b-it-vindex --output ./vindex 2>&1 | tail -15
+          t1=$(date +%s)
+          sz=$(du -sh ./vindex 2>/dev/null | cut -f1)
+          echo "- **pull**: $((t1-t0))s, size ${sz:-?}" >> "$GITHUB_STEP_SUMMARY"
+          df -h / | sed 's/^/after-pull: /'
+
+      - name: run one-shot inference via larql-cli (TIMED)
+        run: |
+          export PATH="$PWD/larql-src/target/release:$PATH"
+          t0=$(date +%s)
+          out=$(larql run ./vindex "Reply with exactly one word: OK" -n 8 2>/tmp/larql-run.err) || { echo "run failed"; tail -30 /tmp/larql-run.err; exit 1; }
+          t1=$(date +%s)
+          echo "$out"
+          echo "- **inference (larql run, no server)**: $((t1-t0))s" >> "$GITHUB_STEP_SUMMARY"
+          verdict=NOT-OK
+          echo "$out" | grep -qiE 'OK' && verdict=OK
+          echo "- response: \`$(echo "$out" | tr '\n' ' ' | head -c 80)\` → **$verdict**" >> "$GITHUB_STEP_SUMMARY"
