@@ -41,6 +41,15 @@ jobs:
           npm install -g @earendil-works/pi-coding-agent@0.75.4
           command -v pi && pi --version 2>&1 | head -3 || { echo "PI NOT INSTALLED / NOT ON PATH"; exit 1; }
 
+      - name: configure pi's ollama provider (models.json pi needs; repo is canonical source)
+        run: |
+          set -x
+          # pi's ollama provider is a static models.json entry (OpenAI-compat, localhost:11434/v1).
+          # A fresh runner has none → "Unknown provider ollama". Install the repo's canonical config.
+          mkdir -p ~/.pi/agent
+          cp config/pi-models.json ~/.pi/agent/models.json
+          cat ~/.pi/agent/models.json
+
       - name: install + serve ollama, pull a pi-recognized model
         run: |
           set -x

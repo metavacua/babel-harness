@@ -1,0 +1,25 @@
+{
+  "_comment": "pi's local-model provider config for babel's --backend ollama. pi reads ~/.pi/agent/models.json; this repo file is the canonical source (dev box + CI install it there). Ollama is an OpenAI-compat provider on localhost:11434/v1. Add models here as they are pulled.",
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "phi3:mini",
+          "reasoning": false,
+          "parameterSize": "3.8B",
+          "quantizationLevel": "Q4_0",
+          "modelFamily": "phi3",
+          "contextLength": 131072,
+          "estimatedSize": { "gpu": 2351250000, "cpu": 6007914000 }
+        }
+      ]
+    }
+  }
+}
