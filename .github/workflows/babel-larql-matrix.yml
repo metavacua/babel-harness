@@ -62,6 +62,8 @@ jobs:
         with:
           name: larql-bins
           path: bin
+      - name: install runtime deps (OpenBLAS — the binary dynamically links it)
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
       - name: run cell (streamed, unbuffered)
         run: |
           set -x
