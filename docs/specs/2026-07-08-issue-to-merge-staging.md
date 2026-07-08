@@ -73,8 +73,8 @@ today, 🟡 = partial, ❌ = missing (issues filed 2026-07-08: #28 degrade-detec
 ### S5 — Independent verification of the proposal
 | Cap | N/S | Status |
 |---|---|---|
-| CI checks actually run on the proposal ref | N | ❌ **structural**: GITHUB_TOKEN-created PRs trigger no workflows (anti-recursion). Requires a PAT/GitHub-App token, or a dispatcher that runs the hermetic gate against the proposal ref and posts a status (#32) |
-| Verification delta vs base quantified (did the proposal make the gate greener, redder, or same?) | S | ❌ |
+| CI checks actually run on the proposal ref | N | 🟡 three graded paths, all verified 2026-07-08 (#32): (a) **approval-required runs** — GITHUB_TOKEN-created PRs DO create `pull_request` runs held for one human click ("Approve workflows to run"; PR #27's babel-ci run sits in exactly this `action_required` state); (b) **dispatched verifier** — `workflow_dispatch`/`repository_dispatch` are exempt from anti-recursion ("always create workflow runs"), so with `actions: write` the proposing run can dispatch a verifier *pinned to the trusted default ref* that checks out the proposal SHA as data and posts a commit status (`statuses: write`) on it — statuses render on the PR and **can be made required checks** ("required status checks can be checks or commit statuses"); (c) PAT/GitHub App for fully ordinary CI |
+| Verification delta vs base quantified (did the proposal make the gate greener, redder, or same?) | S | ❌ (a verifier-workflow deliverable) |
 | Proposal diff bounded to declared targets (any off-target hunk demands escalation, not silence) | S | 🟡 oracle checks presence of a target hit, not absence of off-target damage |
 
 ### S6 — Integration (merge / rebase / squash)
@@ -93,6 +93,43 @@ today, 🟡 = partial, ❌ = missing (issues filed 2026-07-08: #28 degrade-detec
 | Longitudinal metrics: component_check scores, ladder heights, envelope honesty per run | S | ❌ nothing accumulates across runs |
 | Failed post-merge gate → revert path | S | ❌ |
 
+## The capability taxonomy: cannot vs. can-but-doesn't vs. must-not
+
+Everything the loop lacks (per #32 and the tables above) divides three ways. The
+division matters because it separates one-time operator actions from ordinary harness
+code. Platform claims verified against docs.github.com 2026-07-08; repo state checked
+the same day.
+
+**Class A — structurally impossible from inside a GITHUB_TOKEN run** (operator acts once):
+- Making token-created PR runs execute *without* the per-PR human click (needs PAT/App).
+- Satisfying a required-human-review protection: "Pull request authors cannot approve
+  their own pull requests" — rejected at the API, so `github-actions[bot]` can never
+  self-approve. This is the operator gate made structural, and it is *desirable*.
+- Provisioning secrets/Apps, repo settings, branch protection.
+
+**Class B — possible today, merely unimplemented** (deterministic workflow code ± a
+`permissions:` line; no model capability involved):
+- Dedup (query open PRs per issue before creating), supersede-close older attempts,
+  delete halted-run branches — `pull-requests: write` + `contents: write`, already granted.
+- `Fixes #N` linkage, issue-comment audit trail, labels — add `issues: write`.
+- Dispatched verification with a merge-blocking commit status (S5 path b) — add
+  `actions: write` + `statuses: write`.
+- Gate-delta quantification, per-issue regression oracle execution.
+
+**Class C — possible but forbidden by design, currently unenforced**:
+- Self-merge: `main` has **no branch protection** (checked 2026-07-08), so with
+  `contents+pull-requests: write` the workflow token could `gh pr merge` its own
+  proposal into main *today*. The operator gate is an honor system implemented as
+  "the workflow doesn't call merge". The fix is a Class-A one-timer: protect main
+  (required status contexts + required review), converting C into A. Likewise
+  `delete_branch_on_merge:false` — one settings flip absorbs merged-branch cleanup.
+
+The punchline: **almost everything recurring is Class B** — the gap between "functions"
+and "good quality" is ordinary, testable harness code, not platform privilege and not
+model intelligence. The Class-A residue is a short one-time operator checklist:
+protect main, flip delete-branch-on-merge, and (optionally) mint a PAT/App if the
+per-PR approval click ever becomes the bottleneck.
+
 ## The critical path, stated plainly
 
 The loop *functions* today: S0→S4 executed end-to-end for the first time in run
@@ -102,7 +139,9 @@ The loop *functions* today: S0→S4 executed end-to-end for the first time in ru
 1. **S3's per-issue regression oracle** — turns "touched the target" into "changed the
    behavior the issue names". Everything else is scaffolding around this.
 2. **S5's independent verification** — a proposal must be checked by machinery the
-   proposing run cannot influence (token/trigger work required).
+   proposing run cannot influence. Class B via the dispatched verifier pinned to the
+   trusted ref (same pristine-measurement invariant as the ladder snapshot); the
+   operator's one-click approval path already works today (PR #27's held babel-ci run).
 3. **S2's attempt isolation + honest envelope** — so the signal chain from backend to
    PR body never self-contradicts.
 
