@@ -1,0 +1,98 @@
+# babel-local — run the REAL babel harness in CI, driving a LOCAL model.
+#
+# babel-local = `bin/babel` with no cloud provider, using a local-model backend.
+# Ollama is feasible on a 16 GB GitHub runner (it is NOT on the low-RAM dev box,
+# which is why the design uses larql THERE) — so THIS is the venue to test and
+# demonstrate babel depending on a local model for its decisions. This runs the
+# ACTUAL `bin/babel --backend ollama` → the real Pi agent → real ollama. No
+# bespoke model call, no script standing in for the harness.
+name: babel-local
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/babel-local.yml"
+      - "bin/babel"
+      - "bin/pi-harness"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  babel-ollama:
+    name: real bin/babel --backend ollama (local model)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: install the Pi coding agent (babel's pi backend — pinned to the known-working version)
+        run: |
+          set -x
+          # 0.75.4 supports `--provider ollama`; npm latest (0.80.3) regressed it to "Unknown provider ollama".
+          npm install -g @earendil-works/pi-coding-agent@0.75.4
+          command -v pi && pi --version 2>&1 | head -3 || { echo "PI NOT INSTALLED / NOT ON PATH"; exit 1; }
+
+      - name: configure pi's ollama provider (models.json pi needs; repo is canonical source)
+        run: |
+          set -x
+          # pi's ollama provider is a static models.json entry (OpenAI-compat, localhost:11434/v1).
+          # A fresh runner has none → "Unknown provider ollama". Install the repo's canonical config.
+          mkdir -p ~/.pi/agent
+          cp config/pi-models.json ~/.pi/agent/models.json
+          cat ~/.pi/agent/models.json
+
+      - name: install + serve ollama, pull a pi-recognized model
+        run: |
+          set -x
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          # qwen2.5:0.5b — the lightest TOOL-CAPABLE model (the pi coding agent needs function
+          # calling; phi3:mini does not support tools). Defined in config/pi-models.json.
+          ollama pull qwen2.5:0.5b
+          ollama list
+
+      - name: diagnostic — does pi see the ollama model? (pi discovers from the live ollama)
+        run: |
+          set -x
+          pi --list-models 2>&1 | grep -i ollama || echo "WARN: pi lists no ollama models"
+
+      - name: run the REAL babel harness on the local model (no cloud)
+        env:
+          OPENROUTER_CHECK_URL: "http://127.0.0.1:1/none"   # force no cloud provider
+          OLLAMA_MODEL: "qwen2.5:0.5b"
+        run: |
+          set -x
+          export PATH="$PWD/bin:$PATH"
+          set +e
+          bin/babel --backend ollama "Reply with exactly the word SMOKEPASS and nothing else." \
+            > /tmp/babel-out.txt 2> /tmp/babel-err.txt
+          rc=$?
+          set -e
+          echo "=== babel exit=$rc ==="
+          echo "--- stdout (result envelope) ---"; cat /tmp/babel-out.txt
+          echo "--- stderr tail (backend chatter) ---"; tail -60 /tmp/babel-err.txt
+          {
+            echo "## babel-local: real \`bin/babel --backend ollama\` in CI"
+            echo "- exit: \`$rc\`"
+            echo "- envelope: \`$(cat /tmp/babel-out.txt)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: assert the real harness completed on the ollama backend
+        run: |
+          out="$(cat /tmp/babel-out.txt)"
+          echo "$out" | grep -q '"type":"babel_result"' || { echo "FAIL: no babel_result envelope — the harness did not emit its contract"; exit 1; }
+          echo "$out" | grep -q '"backend":"ollama"'   || { echo "FAIL: did not complete on the ollama backend (degraded?)"; exit 1; }
+          echo "$out" | grep -q '"ok":true'            || { echo "FAIL: babel reported ok:false"; exit 1; }
+          # the agent must be able to USE the model — reject a model that can't do tools (pi needs function calling)
+          if grep -q "does not support tools" /tmp/babel-err.txt; then echo "FAIL: local model can't do tools — pi coding agent cannot function"; exit 1; fi
+          echo "PASS: the real bin/babel ran a real agent task on a tool-capable local model in CI"

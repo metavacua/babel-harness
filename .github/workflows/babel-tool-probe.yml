@@ -1,0 +1,67 @@
+# babel-tool-probe — EMPIRICAL sweep: which local models emit STRUCTURED tool
+# calls via ollama's OpenAI-compat /v1 endpoint (the format the pi agent needs),
+# vs dumping the tool JSON into the text `content` channel (the qwen2.5-coder:7b
+# failure observed in babel-selfdev).
+#
+# Isolates the babel-selfdev failure to its root: model, or ollama /v1 tool-call
+# format? One raw request per model — no agentic run. Verdict per cell:
+# STRUCTURED (usable) | TEXT (tool-call-as-content) | NONE (no attempt).
+name: babel-tool-probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/babel-tool-probe.yml"
+      - "scripts/tool_probe_verdict.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: babel-tool-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: "tool-calls: ${{ matrix.model }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - "qwen2.5:0.5b"
+          - "qwen2.5:1.5b"
+          - "qwen2.5:3b"
+          - "qwen2.5-coder:7b"
+          - "qwen2.5-coder:0.5b"   # user's recommended coding default — is it agentic (structured tool_calls)?
+          - "qwen2.5-coder:1.5b"   # upgrade coder — tool-calling?
+          - "llama3.2:3b"       # control: documented-strong ollama tool support
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: install + serve ollama, pull the model
+        run: |
+          set -x
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          ollama pull "${{ matrix.model }}"
+
+      - name: raw tool-call probe against ollama /v1 (structured vs text?)
+        env:
+          MODEL: ${{ matrix.model }}
+        run: |
+          set -x
+          req=$(jq -n --arg m "$MODEL" '{
+            model: $m,
+            messages: [{role:"user", content:"Create a file at path notes.txt containing the text hello. Call the write_file tool to do it."}],
+            tools: [{type:"function", function:{name:"write_file", description:"Write text to a file", parameters:{type:"object", properties:{path:{type:"string"}, content:{type:"string"}}, required:["path","content"]}}}],
+            tool_choice: "auto",
+            stream: false
+          }')
+          resp=$(curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' -d "$req")
+          echo "--- raw response (head) ---"; echo "$resp" | head -c 2000; echo
+          verdict=$(printf '%s' "$resp" | python3 scripts/tool_probe_verdict.py)
+          echo "## $MODEL: $verdict" >> "$GITHUB_STEP_SUMMARY"
+          echo "VERDICT[$MODEL]: $verdict"

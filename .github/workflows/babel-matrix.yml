@@ -1,0 +1,53 @@
+# babel-harness strategy matrix — local-model reliability, quantified per cell.
+#
+# Each cell = (model × backend × role): provisions a runner-local model and runs
+# a grounded ROLE task N times, grading against a golden oracle. The product is
+# NUMBERS (pass/N, rate, latency) written to each cell's job summary — the
+# "quantify results to improve babel" purpose, on the substrate proven usable in
+# CI (Ollama-on-runner). Fork-safe: no secrets, local models only.
+#
+# Axes are values that WORK today; backend is structured to expand (goose/pi/nca
+# are recorded as coverage gaps until wired). fail-fast:false so every cell reports.
+name: babel-matrix
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/babel-matrix.yml"
+      - "scripts/babel_matrix_cell.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: "cell ${{ matrix.model }} · ${{ matrix.role }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ["qwen2.5:0.5b", "qwen2.5:1.5b"]
+        backend: ["ollama-direct"]
+        role: ["bug-detect", "path-guard"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: provision runner-local model (Ollama)
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          ollama pull "${{ matrix.model }}"
+
+      - name: run cell (quantified reliability)
+        env:
+          MODEL: ${{ matrix.model }}
+          BACKEND: ${{ matrix.backend }}
+          ROLE: ${{ matrix.role }}
+          MATRIX_N: "5"
+        run: bash scripts/babel_matrix_cell.sh
