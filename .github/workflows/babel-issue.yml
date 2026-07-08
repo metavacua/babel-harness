@@ -1,0 +1,108 @@
+# babel-issue — babel works a babel-harness issue AUTONOMOUSLY in a runner.
+#
+# Flow (all in the GitHub-hosted runner — the meta-harness):
+#   1. AUTONOMOUS target discovery (deterministic, no model): scripts/issue_context.sh
+#      fetches the issue via gh, extracts the file references that exist in the checkout,
+#      and builds a context-loaded task.
+#   2. babel (real harness, local model) works the task, editing the discovered files.
+#   3. MERGE-PROGRESS LADDER (deterministic certificates) scores distance-to-merge.
+#   4. Opens a PR if babel touched a target (rung 0), with the ladder score in the body.
+# The operator merges; this only proposes + quantifies. Nothing auto-merges.
+name: babel-issue
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "babel-harness issue number for babel to work autonomously"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: babel-issue-${{ github.event.inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  work-issue:
+    name: "babel works issue #${{ github.event.inputs.issue }} (autonomous)"
+    runs-on: ubuntu-latest
+    env:
+      ISSUE: ${{ github.event.inputs.issue }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: provision the harness (pi + ollama + local model)
+        run: |
+          set -x
+          npm install -g @earendil-works/pi-coding-agent@0.75.4
+          mkdir -p ~/.pi/agent && cp config/pi-models.json ~/.pi/agent/models.json
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          ollama pull qwen2.5:0.5b
+
+      - name: AUTONOMOUS target discovery (harness, no model) → context-loaded task
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          bash scripts/issue_context.sh "$ISSUE" > /tmp/task.txt 2>/tmp/disc.log
+          cat /tmp/disc.log
+          echo "task chars: $(wc -c < /tmp/task.txt)"
+
+      - name: babel works the issue (real harness, local model)
+        env:
+          OPENROUTER_CHECK_URL: "http://127.0.0.1:1/none"
+          OLLAMA_MODEL: "qwen2.5:0.5b"
+        run: |
+          set -x
+          export PATH="$PWD/bin:$PATH"
+          bin/babel --backend ollama "$(cat /tmp/task.txt)" > /tmp/babel.out 2> /tmp/babel.err || true
+          echo "=== envelope ==="; cat /tmp/babel.out
+          echo "=== chatter tail ==="; tail -40 /tmp/babel.err
+
+      - name: MERGE-PROGRESS LADDER (deterministic certificates) + PR if rung 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.ref_name }}
+        run: |
+          set -x
+          score() { echo "$1" | tee -a /tmp/ladder.md; }
+          : > /tmp/ladder.md
+          # rung 0 — babel touched a tracked file
+          if [ -z "$(git status --porcelain)" ]; then
+            score "- rung 0 (touched a file): **FAIL** — babel produced no change"
+            { echo "## babel-issue #$ISSUE — merge-progress"; cat /tmp/ladder.md; } >> "$GITHUB_STEP_SUMMARY"
+            echo "no change; nothing to PR (honest halt)"; exit 0
+          fi
+          score "- rung 0 (touched a file): **PASS** — $(git status --porcelain | wc -l) file(s)"
+          git status --porcelain | tee -a /tmp/ladder.md
+          # rung 1 — changed shell scripts still parse
+          rc1=0
+          for f in $(git status --porcelain | awk '{print $2}'); do
+            case "$f" in bin/*|*.sh|*.bash) bash -n "$f" || rc1=1 ;; esac
+          done
+          [ $rc1 = 0 ] && score "- rung 1 (bash -n clean): **PASS**" || score "- rung 1 (bash -n clean): **FAIL**"
+          # rung 2 — the mock certificate suites (no network)
+          rc2=0
+          for t in test-babel test-coding-agent test-pi-harness test-larql-cell test-vindex-completeness; do
+            bash "tests/$t.bash" >/tmp/t.log 2>&1 && score "  - $t: PASS" || { score "  - $t: FAIL"; rc2=1; }
+          done
+          [ $rc2 = 0 ] && score "- rung 2 (certificate suites green): **PASS**" || score "- rung 2 (certificate suites green): **FAIL**"
+          { echo "## babel-issue #$ISSUE — merge-progress ladder"; cat /tmp/ladder.md; } >> "$GITHUB_STEP_SUMMARY"
+          # open the PR (operator gates the merge)
+          git config user.name "babel-harness"; git config user.email "babel@users.noreply.github.com"
+          BR="babel-issue/${ISSUE}-run-${GITHUB_RUN_ID}"
+          git checkout -b "$BR"; git add -A
+          git commit -m "babel-issue #$ISSUE: autonomous attempt (local model)" -m "$(cat /tmp/ladder.md)"
+          git push origin "$BR"
+          gh pr create --base "$BASE_REF" --head "$BR" \
+            --title "babel-issue #$ISSUE: autonomous attempt (merge-progress inside)" \
+            --body "$(printf 'Autonomous attempt at #%s by bin/babel in CI (local model). **Operator gates the merge.**\n\n### Merge-progress ladder\n%s' "$ISSUE" "$(cat /tmp/ladder.md)")"
