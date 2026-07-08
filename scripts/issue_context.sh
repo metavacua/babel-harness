@@ -1,38 +1,57 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# issue_context.sh <issue-number> — AUTONOMOUS target discovery for a babel
-# issue-fix, meant to run IN a CI runner (needs gh auth + the repo checkout; no
-# model). Fetches the issue, deterministically extracts the file references from
-# its body (path-shaped tokens that ACTUALLY exist in the checkout — handles
-# extensionless paths like bin/coding-agent, strips :line suffixes), reads those
-# files, and prints a context-loaded task for babel. The harness does discovery;
-# the model only does the fix within the provided context.
+# issue_context.sh <issue-number> — AUTONOMOUS, BOUNDED target discovery for a
+# babel issue-fix, run IN a CI runner (gh + checkout; no model). Fetches the
+# issue, extracts path[:line] references that exist in the checkout, and emits a
+# SMALL, TARGETED context: the CITED line-region (± a few lines) of each source
+# file, excluding tangential docs, hard-capped in size.
 #
-# Env: GH_REPO (default metavacua/babel-harness). Prints the task to stdout;
-# prints the discovered file list to stderr.
+# Why bounded: measured (babel-context-probe) that qwen2.5:0.5b stops emitting
+# tool calls above ~12-24K chars of context. Over-loading whole files + audit
+# docs pushed it past that cliff and it produced plain text instead of editing.
+# So the harness must keep the context under the model's tool-calling budget.
+#
+# Env: GH_REPO (default metavacua/babel-harness), CTX_CAP (default 8000 chars),
+#      REGION_PAD (default 8 lines). Task -> stdout; discovery -> stderr.
 set -uo pipefail
 N="${1:?usage: issue_context.sh <issue-number>}"
 REPO="${GH_REPO:-metavacua/babel-harness}"
+CAP="${CTX_CAP:-8000}"
+PAD="${REGION_PAD:-8}"
 
 body="$(gh issue view "$N" --repo "$REPO" --json title,body --jq '.title + "\n\n" + (.body // "")' 2>/dev/null)"
 [ -n "$body" ] || { echo "issue_context: could not fetch issue #$N from $REPO" >&2; exit 1; }
 
-# Path-shaped tokens (must contain a '/'), strip a trailing :line or :line-line,
-# dedup, keep only those that exist as files in the checkout.
-files="$(printf '%s' "$body" \
-  | grep -aoE '[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+' \
-  | sed -E 's/[:.,)]+$//' \
-  | sort -u \
-  | while read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done)"
+# path[:line[-line]] tokens that contain a '/', excluding docs/ (tangential inventory).
+refs="$(printf '%s' "$body" \
+  | grep -aoE '[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+(:[0-9]+(-[0-9]+)?)?' \
+  | sed -E 's/[.,)]+$//' \
+  | grep -vE '^docs/' \
+  | sort -u)"
 
-echo "issue_context: #$N discovered target files:" >&2
-printf '%s\n' "${files:-(none)}" >&2
+echo "issue_context: #$N discovered refs:" >&2; printf '%s\n' "${refs:-(none)}" >&2
 
-printf 'Work this babel-harness issue #%s. Edit ONLY the files shown below; keep the test suite green; make the smallest change that resolves it.\n\n=== ISSUE ===\n%s\n' "$N" "$body"
-if [ -n "$files" ]; then
-  printf '\n=== TARGET FILES (edit only these) ===\n'
-  for f in $files; do
-    printf '\n--- %s ---\n```\n%s\n```\n' "$f" "$(cat "$f")"
+# emit each cited region (bounded), tracking a total char budget.
+emit_regions() {
+  local used=0
+  for ref in $refs; do
+    local f="${ref%%:*}" lines="" start end
+    [ -f "$f" ] || continue
+    case "$ref" in
+      *:*) lines="${ref#*:}"; start="${lines%%-*}"; end="${lines#*-}"; [ "$end" = "$lines" ] && end="$start" ;;
+      *)   start=1; end=$(wc -l < "$f") ;;
+    esac
+    start=$(( start > PAD ? start - PAD : 1 )); end=$(( end + PAD ))
+    local region; region="$(sed -n "${start},${end}p" "$f")"
+    local chunk; chunk="$(printf -- '--- %s (lines %s-%s) ---\n```\n%s\n```\n' "$f" "$start" "$end" "$region")"
+    local len=${#chunk}
+    if [ $(( used + len )) -gt "$CAP" ]; then
+      echo "issue_context: cap ${CAP} reached; omitting $f (and any later refs)" >&2; break
+    fi
+    printf '%s\n' "$chunk"; used=$(( used + len ))
   done
-fi
+}
+
+printf 'Work babel-harness issue #%s. Use the write/edit tool to change ONLY the file(s) shown below; keep the test suite green; make the smallest change that resolves it.\n\n=== ISSUE ===\n%s\n\n=== TARGET (edit here) ===\n' "$N" "$body"
+emit_regions
