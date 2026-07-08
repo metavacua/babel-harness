@@ -75,7 +75,7 @@ jobs:
       - name: MERGE-PROGRESS LADDER (deterministic certificates) + PR if rung 0
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_REF: ${{ github.ref_name }}
+          BASE_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           set -x
           score() { echo "$1" | tee -a /tmp/ladder.md; }
