@@ -16,21 +16,25 @@ on:
       issue:
         description: "babel-harness issue number for babel to work autonomously"
         required: true
+  pull_request:
+    paths:
+      - ".github/workflows/babel-issue.yml"   # registers the workflow + one demo run (defaults to #19)
+      - "scripts/issue_context.sh"
 
 permissions:
   contents: write
   pull-requests: write
 
 concurrency:
-  group: babel-issue-${{ github.event.inputs.issue }}
+  group: babel-issue-${{ github.event.inputs.issue || '19' }}
   cancel-in-progress: false
 
 jobs:
   work-issue:
-    name: "babel works issue #${{ github.event.inputs.issue }} (autonomous)"
+    name: "babel works issue #${{ github.event.inputs.issue || '19' }} (autonomous)"
     runs-on: ubuntu-latest
     env:
-      ISSUE: ${{ github.event.inputs.issue }}
+      ISSUE: ${{ github.event.inputs.issue || '19' }}
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v5
