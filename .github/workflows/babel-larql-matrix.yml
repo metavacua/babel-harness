@@ -12,7 +12,7 @@
 # fetches the COMPLETE published snapshot via huggingface_hub and runs larql
 # on the LOCAL dir (scripts/larql_cell.sh) — which also answers the original
 # question these cells exist for: does DIRECT `run` work on vindexes that
-# `serve` choked on? Upstream fix belongs in metavacua/larql-to-sparql.
+# `serve` choked on? Upstream fix: metavacua/larql-to-sparql#270.
 name: babel-larql-matrix
 
 on:

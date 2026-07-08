@@ -97,5 +97,20 @@ ok_contains "envelope names the ollama backend" '"backend":"ollama"' "$__OUT"
 run_babel "MOCK_CURL_OPENROUTER_EXIT=0 MOCK_GOOSE_STREAM_ERR=1" --backend goose stream decode case
 ok_contains "goose stream-decode error is caught (not a false ok:true)" '"ok":false' "$__OUT"
 
+# 11. Sentinel text INSIDE pi/ollama transcript CONTENT must not trigger degrade.
+#     The #19 bug class, observed in the dispatcher itself (CI run 28970562690):
+#     issue #19's body quotes the rate-limit sentinels, the model echoes the task,
+#     and _needs_degrade substring-sniffed the transcript -> false degrade ->
+#     ok:false envelope despite a completed edit. pi signals failure by exit code;
+#     its content channel may legitimately QUOTE any sentinel.
+run_babel "MOCK_CURL_OPENROUTER_EXIT=0 MOCK_PI_ECHO_SENTINEL=1" --backend ollama fix the rate limit bug
+ok_contains "sentinel text in pi content does not degrade (stays on ollama)" '"backend":"ollama"' "$__OUT"
+ok_contains "sentinel-quoting run still completes ok:true" '"ok":true' "$__OUT"
+
+# 12. The inverse guard: pi exiting 0 with NO completion at all must STILL degrade
+#     (fail closed) — the positive completion signal, not exit code alone.
+run_babel "MOCK_CURL_OPENROUTER_EXIT=0 MOCK_PI_SILENT=1" --backend ollama silence is not success
+ok_contains "silent pi run (exit 0, no message) degrades off ollama" '"backend":"larql"' "$__OUT"
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

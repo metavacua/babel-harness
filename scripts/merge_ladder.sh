@@ -54,11 +54,15 @@ fi
 # rung 2 — changed shell files (incl. inside untracked dirs) still parse.
 # Honest accounting: a PASS that linted zero files is a vacuous certificate,
 # so when nothing was lintable the rung says SKIP, and a PASS carries a count.
+# Shell files are detected by path pattern OR shebang: run 28970562690 truncated
+# tests/mocks/goose (shebang bash, no extension) and the pattern alone SKIPped it.
+_is_shell() {
+  case "$1" in bin/*|*.sh|*.bash) return 0 ;; esac
+  head -c 64 "$1" 2>/dev/null | head -1 | grep -qE '^#!.*\b(ba)?sh\b'
+}
 rc2=0; n2=0
 for f in "${CHANGED[@]}"; do
-  case "$f" in
-    bin/*|*.sh|*.bash) [ -f "$f" ] && { n2=$((n2+1)); bash -n "$f" 2>/dev/null || { echo "  - bash -n FAIL: \`$f\`"; rc2=1; }; } ;;
-  esac
+  [ -f "$f" ] && _is_shell "$f" && { n2=$((n2+1)); bash -n "$f" 2>/dev/null || { echo "  - bash -n FAIL: \`$f\`"; rc2=1; }; }
 done
 if [ "$n2" -eq 0 ]; then
   echo "- rung 2 (bash -n clean): **SKIP** — no shell files among the changes"

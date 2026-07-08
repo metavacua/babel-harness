@@ -78,6 +78,15 @@ contains "basename-at-root: oracle still FAILs" "rung 1 (touched a DECLARED TARG
 fresh_repo; echo y >> other.txt; run_ladder
 contains "rung 2 reports SKIP when nothing was lintable" "rung 2 (bash -n clean): **SKIP**" "$OUT"
 
+# 6d. Shebang scripts without a .sh/.bash extension outside bin/ must still be
+#     linted (CI run 28970562690: babel truncated tests/mocks/goose — a shebang
+#     bash script — and rung 2 said "SKIP — no shell files among the changes").
+fresh_repo
+mkdir -p tests/mocks; printf '#!/usr/bin/env bash\necho mock\n' > tests/mocks/fakemock
+git add -A; git commit -qm "add mock"
+printf '#!/usr/bin/env bash\nif then fi (\n' > tests/mocks/fakemock; run_ladder
+contains "shebang script outside bin/ is linted (not SKIPped)" "rung 2 (bash -n clean): **FAIL**" "$OUT"
+
 # 7. Rung 3 runs the given suites and reports per-suite verdicts.
 fresh_repo; printf 'true\n' >> bin/target-file
 printf '#!/usr/bin/env bash\nexit 0\n' > tests/pass.bash

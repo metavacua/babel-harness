@@ -3,5 +3,14 @@
 _provider=$(echo "$*" | grep -o -- '--provider [^ ]*' | awk '{print $2}')
 _model=$(echo "$*" | grep -o -- '--model [^ ]*' | awk '{print $2}')
 echo "MOCK_PI_INVOKED provider=${_provider} model=${_model}" >&2
+# Seam: a run that produced NO completion at all (exit 0, empty transcript) —
+# models the silent-failure case _needs_degrade must fail closed on.
+if [ "${MOCK_PI_SILENT:-0}" = "1" ]; then exit "${MOCK_PI_EXIT:-0}"; fi
+# Seam: transcript CONTENT that legitimately quotes rate-limit sentinels
+# (issue bodies, file contents) — must NOT be read as a provider failure.
+if [ "${MOCK_PI_ECHO_SENTINEL:-0}" = "1" ]; then
+  echo '{"role":"assistant","content":"the issue says: Ran into this error: Rate limit exceeded — fixing the detector"}'
+  exit "${MOCK_PI_EXIT:-0}"
+fi
 echo '{"role":"assistant","content":"MOCK_RESPONSE"}'
 exit "${MOCK_PI_EXIT:-0}"
