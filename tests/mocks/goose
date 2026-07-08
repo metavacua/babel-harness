@@ -13,5 +13,9 @@ if [ "${MOCK_GOOSE_RATE_LIMIT:-0}" = "1" ]; then
   echo "Please retry if you think this is a transient or recoverable error."
   exit 0  # Goose bug: exits 0 even on rate limit
 fi
+if [ "${MOCK_GOOSE_STREAM_ERR:-0}" = "1" ]; then
+  echo "Network error: Stream decode error: error decoding response body"
+  exit 0  # Goose exits 0 even when the streamed response fails to decode (seen driving a larql vindex)
+fi
 echo '{"content":"mock goose response"}'
 exit "${MOCK_GOOSE_EXIT:-0}"

@@ -1,0 +1,94 @@
+# babel-selfdev — babel-harness developing itself in CI.
+#
+# The REAL bin/babel harness (pi coding agent + a local model) performs a task
+# against its own repo checkout inside the runner, then — using the Actions token
+# (write + PR enabled by the operator) — opens a PR with whatever it changed.
+# Human review gates every merge; a local model wrote it. No cloud secret needed
+# (local model), no fake: this is babel using babel to improve babel.
+#
+# Content quality is bounded by the local model (no OpenRouter secret in CI). Add
+# an OPENROUTER_API_KEY repo secret + drop `--backend ollama` to let babel's cloud
+# path do capable self-development.
+name: babel-selfdev
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Self-development task for babel to perform"
+        required: true
+        default: "Create ONE new file docs/babel-backends.md documenting bin/babel's backends (pi, goose, larql, ollama) and its degradation chain, based on reading bin/babel. Create only that file; do not modify any existing file."
+  pull_request:
+    paths:
+      - ".github/workflows/babel-selfdev.yml"   # one demonstration run when this workflow changes
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: babel-selfdev-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  selfdev:
+    name: babel improves babel (real harness, local model) → PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: install pi + configure its ollama provider
+        run: |
+          set -x
+          npm install -g @earendil-works/pi-coding-agent@0.75.4
+          mkdir -p ~/.pi/agent && cp config/pi-models.json ~/.pi/agent/models.json
+
+      - name: install ollama + pull the coder model
+        run: |
+          set -x
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          ollama pull qwen2.5:0.5b
+
+      - name: babel performs the self-development task (real harness)
+        env:
+          OPENROUTER_CHECK_URL: "http://127.0.0.1:1/none"
+          OLLAMA_MODEL: "qwen2.5:0.5b"
+          TASK: ${{ github.event.inputs.task || 'Create ONE new file docs/babel-backends.md documenting bin/babel''s backends (pi, goose, larql, ollama) and its degradation chain, based on reading bin/babel. Create only that file; do not modify any existing file.' }}
+        run: |
+          set -x
+          export PATH="$PWD/bin:$PATH"
+          bin/babel --backend ollama "$TASK" 2>&1 | tee /tmp/selfdev.log || true
+          echo "## babel-selfdev run" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; tail -20 /tmp/selfdev.log >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: open a PR with whatever babel changed (or report none)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TASK: ${{ github.event.inputs.task || 'self-documentation of babel backends' }}
+          BASE_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -x
+          git config user.name "babel-harness"
+          git config user.email "babel@users.noreply.github.com"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "## babel-selfdev: NO changes produced (local model capability / task)" >> "$GITHUB_STEP_SUMMARY"
+            echo "babel produced no file changes — nothing to PR. This is an honest outcome, not a failure."
+            exit 0
+          fi
+          BASE="$BASE_REF"
+          BR="babel-selfdev/run-${GITHUB_RUN_ID}"
+          git checkout -b "$BR"
+          git add -A
+          git commit -m "babel-selfdev: $TASK" \
+                     -m "Produced by the real bin/babel harness (pi + local qwen2.5-coder:7b) in CI run ${GITHUB_RUN_ID}. A LOCAL model wrote this — human review required before merge."
+          git push origin "$BR"
+          gh pr create \
+            --base "$BASE" --head "$BR" \
+            --title "babel-selfdev: automated change (human review required)" \
+            --body "Opened by \`bin/babel --backend ollama\` — the real harness, driven by a local model, running in CI (run ${GITHUB_RUN_ID}). **A local model wrote this; review before merging.** Task: $TASK"
+          echo "## babel-selfdev: opened PR from branch \`$BR\`" >> "$GITHUB_STEP_SUMMARY"

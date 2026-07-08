@@ -1,0 +1,34 @@
+{
+  "_comment": "pi's local-model provider config for babel's --backend ollama. pi reads ~/.pi/agent/models.json; this repo file is the canonical source (dev box + CI install it there). Ollama is an OpenAI-compat provider on localhost:11434/v1. Models MUST support tools (function calling) for the pi coding agent — phi3:mini does NOT; the qwen2.5 family does. Prefer the lightest tool-capable model.",
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "qwen2.5:0.5b",
+          "reasoning": false,
+          "parameterSize": "0.5B",
+          "quantizationLevel": "Q4_K_M",
+          "modelFamily": "qwen2",
+          "contextLength": 32768,
+          "estimatedSize": { "gpu": 500000000, "cpu": 500000000 }
+        },
+        {
+          "id": "qwen2.5-coder:7b",
+          "reasoning": false,
+          "parameterSize": "7B",
+          "quantizationLevel": "Q4_K_M",
+          "modelFamily": "qwen2",
+          "contextLength": 32768,
+          "estimatedSize": { "gpu": 4685000000, "cpu": 4685000000 }
+        }
+      ]
+    }
+  }
+}

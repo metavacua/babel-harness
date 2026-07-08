@@ -76,6 +76,7 @@ out=$(PATH="$MOCKS:$PATH" \
 rc=$?
 assert_exit "exits 0" "0" "$rc"
 assert_contains "goose called with openrouter provider" "GOOSE_PROVIDER=openrouter" "$(cat "$calllog")"
+assert_contains "default model is openrouter's dynamic free-model router" "GOOSE_MODEL=openrouter/free" "$(cat "$calllog")"
 rm -f "$calllog"
 
 echo ""
