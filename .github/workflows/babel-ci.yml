@@ -20,6 +20,12 @@ on:
 permissions:
   contents: read
 
+# explicit bash => `-eo pipefail`: without it the suite steps' `| tee` swallows
+# every failing exit code and the "gate" cannot actually fail (found 2026-07-08).
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -55,6 +61,15 @@ jobs:
       - name: vindex-completeness checker suite (independent rejection power)
         run: bash tests/test-vindex-completeness.bash | tee /tmp/vindex-completeness.log
 
+      - name: component-check suite (DOING components fired?)
+        run: bash tests/test-component-check.bash | tee /tmp/component-check.log
+
+      - name: merge-ladder suite (the babel-issue PR oracle)
+        run: bash tests/test-merge-ladder.bash | tee /tmp/merge-ladder.log
+
+      - name: issue-context suite (TARGETS_OUT — the oracle's input)
+        run: bash tests/test-issue-context.bash | tee /tmp/issue-context.log
+
       - name: deep-research-babel static guard
         run: bash .claude/skills/deep-research-babel/smoke.sh
 
@@ -64,7 +79,7 @@ jobs:
           {
             echo "## Hermetic gate"
             echo '```'
-            for f in /tmp/babel.log /tmp/coding.log /tmp/pi.log /tmp/larql-cell.log /tmp/vindex-completeness.log; do [ -f "$f" ] && tail -1 "$f"; done
+            for f in /tmp/babel.log /tmp/coding.log /tmp/pi.log /tmp/larql-cell.log /tmp/vindex-completeness.log /tmp/component-check.log /tmp/merge-ladder.log /tmp/issue-context.log; do [ -f "$f" ] && tail -1 "$f" || true; done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

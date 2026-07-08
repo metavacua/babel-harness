@@ -14,6 +14,9 @@
 #
 # Env: GH_REPO (default metavacua/babel-harness), CTX_CAP (default 8000 chars),
 #      REGION_PAD (default 8 lines). Task -> stdout; discovery -> stderr.
+#      TARGETS_OUT (optional): also write the DECLARED TARGET files (cited paths
+#      that exist in the checkout, one per line) to this file — the
+#      machine-readable oracle input merge_ladder.sh rung 1 consumes.
 set -uo pipefail
 N="${1:?usage: issue_context.sh <issue-number>}"
 REPO="${GH_REPO:-metavacua/babel-harness}"
@@ -31,6 +34,16 @@ refs="$(printf '%s' "$body" \
   | sort -u)"
 
 echo "issue_context: #$N discovered refs:" >&2; printf '%s\n' "${refs:-(none)}" >&2
+
+# machine-readable target list for the merge ladder's oracle rung. Paths are
+# normalized to git's root-relative form (no './' — git never prints it, and
+# the oracle's grep -qxF is an exact-line match). Known limitation: targets are
+# files that already EXIST in the checkout, so file-CREATION issues declare no
+# target and can never earn a PR — matching the region-extraction design above.
+if [ -n "${TARGETS_OUT:-}" ]; then
+  for ref in $refs; do f="${ref%%:*}"; f="${f#./}"; [ -f "$f" ] && printf '%s\n' "$f"; done | sort -u > "$TARGETS_OUT"
+  echo "issue_context: targets -> $TARGETS_OUT ($(wc -l < "$TARGETS_OUT") file(s))" >&2
+fi
 
 # emit each cited region (bounded), tracking a total char budget.
 emit_regions() {

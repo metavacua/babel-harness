@@ -1,13 +1,18 @@
-# larql debugging MATRIX — build once, fan out a dozen hypotheses in PARALLEL on
-# capable runners, STREAM every cell's output (set -x + unbuffered + tee, no
-# silent file-redirect / no `| tail` buffering). One run answers many questions;
-# live logs are visible in the Actions UI as each cell runs. This replaces the
-# serial, blind, 20-min-per-guess loop.
+# larql debugging MATRIX — build once, fan out cells in PARALLEL on capable
+# runners, STREAM every cell's output (set -x + unbuffered + tee, no silent
+# file-redirect / no `| tail` buffering). One run answers many questions;
+# live logs are visible in the Actions UI as each cell runs.
 #
-# Root cause under test: larql run/serve/show prepend hf:// to a filesystem path
-# (a local vindex 404s as hf://<abspath>) — local vindexes must be `larql link`ed
-# and referenced by cache name. Cells test that + run-vs-serve + f16-vs-q4k +
-# extract-vs-published, all at once, lightest models first.
+# ROOT CAUSE FOUND (2026-07-08, traced in larql source — supersedes the old
+# hf://-prepend hypothesis): `larql run hf://...` resolves METADATA-ONLY
+# (resolve_model -> resolve_hf_vindex defers weights to download_hf_weights,
+# which has no production callers; even `larql pull` fetches only core files).
+# On a fresh runner cache the engine opens a never-downloaded weight file and
+# dies: "IO error: No such file or directory (os error 2)". So each cell
+# fetches the COMPLETE published snapshot via huggingface_hub and runs larql
+# on the LOCAL dir (scripts/larql_cell.sh) — which also answers the original
+# question these cells exist for: does DIRECT `run` work on vindexes that
+# `serve` choked on? Upstream fix belongs in metavacua/larql-to-sparql.
 name: babel-larql-matrix
 
 on:
@@ -15,9 +20,16 @@ on:
   pull_request:
     paths:
       - ".github/workflows/babel-larql-matrix.yml"
+      - "scripts/larql_cell.sh"
 
 permissions:
   contents: read
+
+# explicit bash => `-eo pipefail`: without it `cargo build ... | tail` masks a
+# failed build behind tail's rc 0 and the cells fan out against stale/no bins.
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,6 +39,7 @@ jobs:
   build:
     name: build larql once (shared artifact)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -51,20 +64,23 @@ jobs:
     name: "cell ${{ matrix.cell }}"
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         cell:
-          - run-hf-gemma-f16       # does DIRECT run work on the f16 gemma vindex (serve 500'd)?
-          - run-hf-granite-q4k     # direct run on published q4k vindex (serve hit Io NotFound)
+          - run-hf-gemma           # does DIRECT run work on the gemma vindex (serve 500'd)? files are legacy-q4k-named
+          - run-hf-granite-q4k     # direct run on published q4k granite vindex (serve hit Io NotFound)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           name: larql-bins
           path: bin
-      - name: install runtime deps (OpenBLAS — the binary dynamically links it)
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
+      - name: install runtime deps (OpenBLAS — dynamically linked; huggingface_hub — full snapshot fetch)
+        run: |
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev
+          pip install -q "huggingface_hub>=0.23"
       - name: run cell (streamed, unbuffered)
         run: |
           set -x

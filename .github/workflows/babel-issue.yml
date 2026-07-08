@@ -3,10 +3,14 @@
 # Flow (all in the GitHub-hosted runner — the meta-harness):
 #   1. AUTONOMOUS target discovery (deterministic, no model): scripts/issue_context.sh
 #      fetches the issue via gh, extracts the file references that exist in the checkout,
-#      and builds a context-loaded task.
+#      builds a context-loaded task, and declares the TARGET files (TARGETS_OUT).
 #   2. babel (real harness, local model) works the task, editing the discovered files.
-#   3. MERGE-PROGRESS LADDER (deterministic certificates) scores distance-to-merge.
-#   4. Opens a PR if babel touched a target (rung 0), with the ladder score in the body.
+#   3. MERGE-PROGRESS LADDER (scripts/merge_ladder.sh, deterministic certificates,
+#      graded by tests/test-merge-ladder.bash) scores distance-to-merge.
+#   4. Opens a PR ONLY if babel touched a DECLARED TARGET (the rung-1 oracle) —
+#      "touched any file" is not progress: the 2026-07-08 #19 run wrote an
+#      unrelated src/ blob and the old rung-0 gate would have PR'd it.
+#      component_check.py (DOING components) is reported non-gating.
 # The operator merges; this only proposes + quantifies. Nothing auto-merges.
 name: babel-issue
 
@@ -20,10 +24,17 @@ on:
     paths:
       - ".github/workflows/babel-issue.yml"   # registers the workflow + one demo run (defaults to #19)
       - "scripts/issue_context.sh"
+      - "scripts/merge_ladder.sh"
 
 permissions:
   contents: write
   pull-requests: write
+
+# explicit bash => `-eo pipefail`, so piped provisioning/diagnostic failures
+# can't hide behind the last command of a pipeline.
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: babel-issue-${{ github.event.inputs.issue || '19' }}
@@ -32,12 +43,23 @@ concurrency:
 jobs:
   work-issue:
     name: "babel works issue #${{ github.event.inputs.issue || '19' }} (autonomous)"
+    # Same-repo only: `ref: github.head_ref` resolves against the BASE repo, so a
+    # fork PR would die at checkout — and the push/pr-create path needs a write
+    # token forks never get. Halt deliberately instead of erroring at step 1.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       ISSUE: ${{ github.event.inputs.issue || '19' }}
       GH_REPO: ${{ github.repository }}
     steps:
+      # On pull_request, check out the PR's HEAD BRANCH, not the detached merge
+      # ref: the babel branch is cut (and the PR based) from here — basing on
+      # github.ref_name (e.g. `22/merge`) is what broke PR creation on 2026-07-08
+      # ("Base ref must be a branch"). Empty ref = event default (workflow_dispatch).
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -52,14 +74,22 @@ jobs:
           for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
           ollama pull qwen2.5:0.5b
 
-      - name: AUTONOMOUS target discovery (harness, no model) → context-loaded task
+      - name: AUTONOMOUS target discovery (harness, no model) → context-loaded task + declared targets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -x
-          bash scripts/issue_context.sh "$ISSUE" > /tmp/task.txt 2>/tmp/disc.log
+          # keep the diagnostics visible even when discovery fails: under the
+          # step's -e shell, a bare failure would exit before the cat.
+          TARGETS_OUT=/tmp/targets.txt bash scripts/issue_context.sh "$ISSUE" > /tmp/task.txt 2>/tmp/disc.log \
+            || { rc=$?; cat /tmp/disc.log; exit $rc; }
           cat /tmp/disc.log
           echo "task chars: $(wc -c < /tmp/task.txt)"
+          echo "=== declared targets (the rung-1 oracle) ==="; cat /tmp/targets.txt || true
+          # snapshot the grader BEFORE babel gets write access to the tree: the
+          # PR-licensing exit code must come from pristine code, not from a file
+          # the graded agent could have rewritten.
+          cp scripts/merge_ladder.sh /tmp/merge_ladder.pristine.sh
 
       - name: babel works the issue (real harness, local model)
         env:
@@ -72,38 +102,32 @@ jobs:
           echo "=== envelope ==="; cat /tmp/babel.out
           echo "=== chatter tail ==="; tail -40 /tmp/babel.err
 
-      - name: MERGE-PROGRESS LADDER (deterministic certificates) + PR if rung 0
+      - name: MERGE-PROGRESS LADDER (deterministic certificates) + PR only if a TARGET moved
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           set -x
-          score() { echo "$1" | tee -a /tmp/ladder.md; }
-          : > /tmp/ladder.md
-          # rung 0 — babel touched a tracked file
-          if [ -z "$(git status --porcelain)" ]; then
-            score "- rung 0 (touched a file): **FAIL** — babel produced no change"
-            { echo "## babel-issue #$ISSUE — merge-progress"; cat /tmp/ladder.md; } >> "$GITHUB_STEP_SUMMARY"
-            echo "no change; nothing to PR (honest halt)"; exit 0
-          fi
-          score "- rung 0 (touched a file): **PASS** — $(git status --porcelain | wc -l) file(s)"
-          git status --porcelain | tee -a /tmp/ladder.md
-          # rung 1 — changed shell scripts still parse
-          rc1=0
-          for f in $(git status --porcelain | awk '{print $2}'); do
-            case "$f" in bin/*|*.sh|*.bash) bash -n "$f" || rc1=1 ;; esac
-          done
-          [ $rc1 = 0 ] && score "- rung 1 (bash -n clean): **PASS**" || score "- rung 1 (bash -n clean): **FAIL**"
-          # rung 2 — the mock certificate suites (no network)
-          rc2=0
-          for t in test-babel test-coding-agent test-pi-harness test-larql-cell test-vindex-completeness; do
-            bash "tests/$t.bash" >/tmp/t.log 2>&1 && score "  - $t: PASS" || { score "  - $t: FAIL"; rc2=1; }
-          done
-          [ $rc2 = 0 ] && score "- rung 2 (certificate suites green): **PASS**" || score "- rung 2 (certificate suites green): **FAIL**"
+          # the PRISTINE grader (snapshotted before babel ran) scores the tree;
+          # rung-3 suites inside it still run working-tree copies, but those are
+          # report-only — the exit code that licenses the PR is pristine.
+          LRC=0
+          TARGETS_FILE=/tmp/targets.txt bash /tmp/merge_ladder.pristine.sh > /tmp/ladder.md || LRC=$?
           { echo "## babel-issue #$ISSUE — merge-progress ladder"; cat /tmp/ladder.md; } >> "$GITHUB_STEP_SUMMARY"
-          # open the PR (operator gates the merge)
+          # DOING components from babel's own tool calls (function, not quality) — non-gating report
+          { echo "### component check (babel's own tool calls)"; echo '```'
+            python3 scripts/component_check.py /tmp/babel.err || true; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # ONLY the ladder's contract codes are honest halts; anything else is
+          # the grader itself failing and must turn the run RED, not green.
+          case "$LRC" in
+            0) ;;
+            10|11) echo "ladder rc=$LRC — honest halt, no PR (10 = no change, 11 = nothing babel touched was a declared target)"; exit 0 ;;
+            *) echo "ladder rc=$LRC — grader failure (out of contract), failing the run"; exit "$LRC" ;;
+          esac
+          # a declared target moved — open the PR (operator gates the merge)
           git config user.name "babel-harness"; git config user.email "babel@users.noreply.github.com"
-          BR="babel-issue/${ISSUE}-run-${GITHUB_RUN_ID}"
+          BR="babel-issue/${ISSUE}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git checkout -b "$BR"; git add -A
           git commit -m "babel-issue #$ISSUE: autonomous attempt (local model)" -m "$(cat /tmp/ladder.md)"
           git push origin "$BR"
