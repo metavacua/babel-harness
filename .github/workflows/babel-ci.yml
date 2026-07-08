@@ -1,0 +1,135 @@
+# babel-harness CI — first cut (ADR-0001 follow-on).
+# Purpose (per project direction): build + test babel within a GitHub-hosted
+# runner's bounds and QUANTIFY, so results feed back into improving babel.
+#
+# Structure:
+#   hermetic      — fork-safe, no secrets: tests babel's DISPATCH logic via the
+#                   mock suites (the reliable, network-free core). This is the gate.
+#   probe-ollama  — experiment: is Ollama usable on a GitHub runner? (it isn't on
+#                   the dev box). Non-blocking; quantifies feasibility.
+#   probe-weights — experiment: can a runner pull open weights from HuggingFace
+#                   for the strategy matrices? Non-blocking; quantifies feasibility.
+name: babel-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]   # feature branches are covered by pull_request; avoids the push+PR double-run
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# explicit bash => `-eo pipefail`: without it the suite steps' `| tee` swallows
+# every failing exit code and the "gate" cannot actually fail (found 2026-07-08).
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hermetic:
+    name: hermetic gate (mock, no secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: bash syntax check (all shipped scripts)
+        run: |
+          rc=0
+          for f in bin/* lib/*.sh scripts/*.sh tests/*.bash .claude/skills/*/smoke.sh; do
+            [ -f "$f" ] || continue
+            if bash -n "$f"; then echo "ok   $f"; else echo "FAIL $f"; rc=1; fi
+          done
+          exit $rc
+
+      - name: babel acceptance spec (14 assertions)
+        run: bash tests/test-babel.bash | tee /tmp/babel.log
+
+      - name: coding-agent unit suite
+        run: bash tests/test-coding-agent.bash | tee /tmp/coding.log
+
+      - name: pi-harness unit suite
+        run: bash tests/test-pi-harness.bash | tee /tmp/pi.log
+
+      - name: larql-cell verdict suite
+        run: bash tests/test-larql-cell.bash | tee /tmp/larql-cell.log
+
+      - name: vindex-completeness checker suite (independent rejection power)
+        run: bash tests/test-vindex-completeness.bash | tee /tmp/vindex-completeness.log
+
+      - name: component-check suite (DOING components fired?)
+        run: bash tests/test-component-check.bash | tee /tmp/component-check.log
+
+      - name: merge-ladder suite (the babel-issue PR oracle)
+        run: bash tests/test-merge-ladder.bash | tee /tmp/merge-ladder.log
+
+      - name: issue-context suite (TARGETS_OUT — the oracle's input)
+        run: bash tests/test-issue-context.bash | tee /tmp/issue-context.log
+
+      - name: deep-research-babel static guard
+        run: bash .claude/skills/deep-research-babel/smoke.sh
+
+      - name: quantify → job summary
+        if: always()
+        run: |
+          {
+            echo "## Hermetic gate"
+            echo '```'
+            for f in /tmp/babel.log /tmp/coding.log /tmp/pi.log /tmp/larql-cell.log /tmp/vindex-completeness.log /tmp/component-check.log /tmp/merge-ladder.log /tmp/issue-context.log; do [ -f "$f" ] && tail -1 "$f" || true; done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  probe-ollama:
+    name: probe — is Ollama usable on a runner?
+    if: github.event_name == 'workflow_dispatch'   # one-time feasibility check, not per-PR
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - name: install + tiny model + trivial inference (timed)
+        run: |
+          set -x
+          t0=$(date +%s)
+          curl -fsSL https://ollama.com/install.sh | sh || { echo "install failed"; exit 1; }
+          ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          ollama pull qwen2.5:0.5b
+          t1=$(date +%s)
+          out=$(curl -fsS http://localhost:11434/api/generate \
+                 -d '{"model":"qwen2.5:0.5b","prompt":"Reply with one word: OK","stream":false}')
+          t2=$(date +%s)
+          echo "$out"
+          {
+            echo "## Probe: Ollama on GitHub runner"
+            echo "- install+pull: $((t1-t0))s | inference: $((t2-t1))s"
+            echo "- response: $(echo "$out" | head -c 200)"
+            echo "$out" | grep -qiE 'OK|response' && echo "- verdict: **USABLE**" || echo "- verdict: **NOT usable / unexpected**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  probe-weights:
+    name: probe — can a runner pull open weights from HuggingFace?
+    if: github.event_name == 'workflow_dispatch'   # one-time feasibility check, not per-PR
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: pull a tiny open model (timed, no auth)
+        run: |
+          set -x
+          pip install -q "huggingface_hub>=0.23"
+          t0=$(date +%s)
+          out=$(python3 scripts/ci_hf_probe.py); rc=$?
+          t1=$(date +%s)
+          echo "$out"
+          {
+            echo "## Probe: HuggingFace open-weights pull"
+            echo "- pull time: $((t1-t0))s (no auth token)"
+            [ "$rc" = "0" ] && echo "- verdict: **PULLABLE** — $out" || echo "- verdict: **BLOCKED/failed** (rc=$rc)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc

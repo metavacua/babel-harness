@@ -1,0 +1,88 @@
+# larql debugging MATRIX — build once, fan out cells in PARALLEL on capable
+# runners, STREAM every cell's output (set -x + unbuffered + tee, no silent
+# file-redirect / no `| tail` buffering). One run answers many questions;
+# live logs are visible in the Actions UI as each cell runs.
+#
+# ROOT CAUSE FOUND (2026-07-08, traced in larql source — supersedes the old
+# hf://-prepend hypothesis): `larql run hf://...` resolves METADATA-ONLY
+# (resolve_model -> resolve_hf_vindex defers weights to download_hf_weights,
+# which has no production callers; even `larql pull` fetches only core files).
+# On a fresh runner cache the engine opens a never-downloaded weight file and
+# dies: "IO error: No such file or directory (os error 2)". So each cell
+# fetches the COMPLETE published snapshot via huggingface_hub and runs larql
+# on the LOCAL dir (scripts/larql_cell.sh) — which also answers the original
+# question these cells exist for: does DIRECT `run` work on vindexes that
+# `serve` choked on? Upstream fix: metavacua/larql-to-sparql#270.
+name: babel-larql-matrix
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/babel-larql-matrix.yml"
+      - "scripts/larql_cell.sh"
+
+permissions:
+  contents: read
+
+# explicit bash => `-eo pipefail`: without it `cargo build ... | tail` masks a
+# failed build behind tail's rc 0 and the cells fan out against stale/no bins.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build larql once (shared artifact)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: metavacua/larql-to-sparql
+      - run: sudo apt-get update && sudo apt-get install -y libopenblas-dev pkg-config
+      - name: build larql-cli + larql-server (timed)
+        run: |
+          set -x
+          t0=$(date +%s)
+          stdbuf -oL -eL cargo build --release -p larql-cli -p larql-server 2>&1 | stdbuf -oL tail -25
+          t1=$(date +%s)
+          echo "## build: $((t1-t0))s" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: larql-bins
+          path: |
+            target/release/larql
+            target/release/larql-server
+          retention-days: 1
+
+  test:
+    name: "cell ${{ matrix.cell }}"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cell:
+          - run-hf-gemma           # does DIRECT run work on the gemma vindex (serve 500'd)? files are legacy-q4k-named
+          - run-hf-granite-q4k     # direct run on published q4k granite vindex (serve hit Io NotFound)
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: larql-bins
+          path: bin
+      - name: install runtime deps (OpenBLAS — dynamically linked; huggingface_hub — full snapshot fetch)
+        run: |
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev
+          pip install -q "huggingface_hub>=0.23"
+      - name: run cell (streamed, unbuffered)
+        run: |
+          set -x
+          chmod +x bin/larql bin/larql-server || true
+          CELL="${{ matrix.cell }}" LARQL_BIN_DIR="$PWD/bin" bash scripts/larql_cell.sh

@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# babel — the single dispatcher (ADR-0001). One entry point that owns intake,
+# backend selection, a graceful-degradation chain (a rate-limited/failed backend
+# is caught INTERNALLY and the next option is tried — the caller never sees a raw
+# rate-limit), one output envelope, and path normalization. pi / goose / larql
+# are interchangeable executors behind one contract.
+#
+# Contract: exactly one JSON envelope line on stdout. Rate-limit is a bug, not a
+# result: the external channel shows a completion (ok:true) or, only when every
+# option is exhausted, a STRUCTURED fatal (ok:false) — never a raw provider error.
+#
+# This is the inline REFERENCE implementation graded by tests/test-babel.bash.
+set -uo pipefail
+
+PI_BIN="${PI_BIN:-$(command -v pi 2>/dev/null || echo "$HOME/.local/share/pi-node/current/bin/pi")}"
+GOOSE_BIN="${GOOSE_BIN:-goose}"
+LARQL_BIN="${LARQL_BIN:-$HOME/larql/target/release/larql}"
+OPENROUTER_CHECK_URL="${OPENROUTER_CHECK_URL:-https://openrouter.ai/api/v1/models}"
+OPENROUTER_MODEL="${OPENROUTER_MODEL:-openrouter/free}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:0.5b}"   # opt-in local model; feasible on a CI runner, not this low-RAM dev box
+LARQL_PORT="${LARQL_PORT:-8080}"
+LARQL_VINDEX="${LARQL_VINDEX:-smollm2-360m}"
+LARQL_READY_TRIES="${LARQL_READY_TRIES:-3}"
+LARQL_NO_CGROUP="${LARQL_NO_CGROUP:-0}"
+CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
+CGROUP_NAME="${CGROUP_NAME:-babel-harness}"
+source "$(dirname "$0")/../lib/harness-common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: babel [OPTIONS] TASK...
+
+One command. babel picks the executor and provider internally and degrades
+gracefully past any rate-limited/failed backend until the task completes.
+
+Options:
+  --backend B   Force first executor: pi | goose | larql  (default: auto)
+  --vindex V    larql vindex (path or name); relative paths are made absolute
+  --model M     Override cloud model
+  -h, --help    Show this help
+EOF
+}
+
+emit_envelope() { printf '{"type":"babel_result","backend":"%s","ok":%s}\n' "$1" "$2"; }
+
+# _needs_degrade BACKEND — did this attempt fail? Backend-aware (the #19 bug
+# class, reproduced in the dispatcher itself on CI run 28970562690: issue #19's
+# body QUOTES the rate-limit sentinels, the model echoes the task, and a global
+# substring sniff misread content as provider failure -> false degrade ->
+# ok:false despite a completed edit).
+#   pi/ollama: pi (--mode json) signals harness failure via exit code, and its
+#     content channel may legitimately quote any sentinel — so instead of a
+#     negative sniff, require the POSITIVE completion signal (an assistant
+#     message). Fails closed: exit-0 silence is a failure, not a success.
+#   goose/larql (Goose-driven): Goose exits 0 even on rate-limit/stream errors,
+#     so ITS output must still be sniffed. Narrowing that sniff to Goose's own
+#     status lines (vs. file content it echoes) remains issue #19's remit.
+_needs_degrade() {
+  [ "${RB_RC:-0}" -ne 0 ] && return 0
+  case "$1" in
+    pi|ollama)
+      printf '%s' "${RB_OUT:-}" | grep -q '"role":"assistant"' && return 1
+      return 0 ;;
+    *)
+      printf '%s' "${RB_OUT:-}" | grep -qiE 'rate.?limit|Ran into this error|Provider returned error|no provider available|error decoding response|stream decode error|Network error' && return 0
+      return 1 ;;
+  esac
+}
+
+_maybe_cgroup_self() {
+  [ "$LARQL_NO_CGROUP" = "1" ] && return 0
+  local cg="${CGROUP_ROOT}/memory/${CGROUP_NAME}"
+  [ -d "$cg" ] || return 0
+  echo "$BASHPID" | sudo tee "${cg}/cgroup.procs" >/dev/null 2>&1 || true
+}
+
+_abspath() { case "$1" in /*) printf '%s' "$1";; *) printf '%s/%s' "$(pwd)" "${1#./}";; esac; }
+_larql_ready() { _check_http "http://localhost:${LARQL_PORT}/v1/models"; }
+
+# run_backend NAME TASK — runs one executor, sets RB_OUT (combined output) and
+# RB_RC (exit). Emits NOTHING to stdout; the caller decides success/degrade.
+run_backend() {
+  local b="$1" task="$2"; RB_OUT=""; RB_RC=0
+  case "$b" in
+    pi)
+      RB_OUT="$("$PI_BIN" --provider openrouter --model "$OPENROUTER_MODEL" --print --mode json "$task" 2>&1)" || RB_RC=$? ;;
+    ollama)
+      # opt-in local model: drive the Pi agent at a local ollama server. Not in the
+      # AUTO chain (larql is the local terminal per ADR-0001); explicit --backend only.
+      RB_OUT="$("$PI_BIN" --provider ollama --model "$OLLAMA_MODEL" --print --mode json "$task" 2>&1)" || RB_RC=$? ;;
+    goose)
+      RB_OUT="$(GOOSE_PROVIDER=openrouter GOOSE_MODEL="$OPENROUTER_MODEL" GOOSE_MODE=auto "$GOOSE_BIN" run -t "$task" 2>&1)" || RB_RC=$? ;;
+    larql)
+      local vindex; vindex="$(_abspath "${VINDEX:-$LARQL_VINDEX}")"
+      if ! _larql_ready; then
+        echo "babel: starting larql serve $vindex on port $LARQL_PORT" >&2
+        "$LARQL_BIN" serve "$vindex" --port "$LARQL_PORT" >>"/tmp/babel-larql-${LARQL_PORT}.log" 2>&1 &
+        local i=0; while [ "$i" -lt "$LARQL_READY_TRIES" ] && ! _larql_ready; do sleep 0.2; i=$((i+1)); done
+      fi
+      # the server registers the model under the id from the vindex's index.json (often a
+      # snapshot SHA), NOT the vindex basename — query /v1/models so Goose targets the right one.
+      local mid; mid="$(curl -sf "http://localhost:${LARQL_PORT}/v1/models" 2>/dev/null \
+        | python3 -c 'import json,sys; d=(json.load(sys.stdin).get("data") or [{}]); print(d[0].get("id",""))' 2>/dev/null)"
+      [ -z "$mid" ] && mid="$LARQL_VINDEX"
+      RB_OUT="$(GOOSE_PROVIDER=openai OPENAI_BASE_URL="http://localhost:${LARQL_PORT}/v1" OPENAI_API_KEY=larql \
+               GOOSE_MODEL="$mid" GOOSE_MODE=auto "$GOOSE_BIN" run -t "$task" 2>&1)" || RB_RC=$? ;;
+    *) RB_OUT="babel: unknown backend $b"; RB_RC=2 ;;
+  esac
+}
+
+# --- Argument parsing: accumulate TASK (quote-safe; no word-drop) ---
+BACKEND="auto"; VINDEX=""; TASK=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --backend) BACKEND="${2:?--backend requires pi|goose|larql|ollama}"; shift 2 ;;
+    --vindex)  VINDEX="${2:?--vindex requires a value}"; shift 2 ;;
+    --model)   OPENROUTER_MODEL="${2:?--model requires a value}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --)        shift; while [[ $# -gt 0 ]]; do TASK="${TASK:+$TASK }$1"; shift; done ;;
+    -*)        echo "babel: unknown option: $1" >&2; usage; exit 1 ;;
+    *)         TASK="${TASK:+$TASK }$1"; shift ;;
+  esac
+done
+[ -z "$TASK" ] && { echo "babel: TASK required" >&2; usage; exit 1; }
+
+_maybe_cgroup_self
+
+# --- Build the degradation chain (larql local is the always-available terminal) ---
+if [ "$BACKEND" = "auto" ]; then
+  if _check_openrouter; then CHAIN=(pi goose larql); else CHAIN=(larql); fi
+else
+  CHAIN=("$BACKEND"); [ "$BACKEND" != "larql" ] && CHAIN+=(larql)
+fi
+
+# --- Attempt each in turn; degrade past rate-limits/failures; never surface them ---
+for b in "${CHAIN[@]}"; do
+  echo "babel: attempt backend=$b" >&2
+  run_backend "$b" "$TASK"
+  printf '%s\n' "$RB_OUT" >&2   # backend chatter stays on stderr (internal), never stdout
+  if _needs_degrade "$b"; then
+    echo "babel: backend=$b unavailable (rate-limit/error) — degrading to next option" >&2
+    continue
+  fi
+  emit_envelope "$b" true
+  exit 0
+done
+
+echo "babel: all backends exhausted — fatal" >&2
+emit_envelope none false
+exit 1

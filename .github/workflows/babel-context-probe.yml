@@ -1,0 +1,63 @@
+# babel-context-probe — systematic-debugging Phase 1 for: "why did qwen2.5:0.5b
+# emit no tool call on the 25 KB #19 task, when it tool-calls on a small prompt?"
+#
+# Isolates ONE variable — prompt size — at the model/ollama boundary (raw /v1,
+# no pi). Same tools, same instruction, escalating context (0, 4K, 12K, 24K chars
+# of real bin/coding-agent prepended). Per size: STRUCTURED | TEXT | NONE.
+# Evidence, not a fix.
+name: babel-context-probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/babel-context-probe.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: babel-context-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: "ctx=${{ matrix.chars }} chars"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        chars: ["0", "4000", "12000", "24000"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: install + serve ollama, pull qwen2.5:0.5b
+        run: |
+          set -x
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          ollama pull qwen2.5:0.5b
+
+      - name: raw /v1 tools request, ctx prepended (hold everything else constant)
+        env:
+          CHARS: ${{ matrix.chars }}
+        run: |
+          set -x
+          # a fixed instruction + tool; only the prepended context grows.
+          ctx=""
+          [ "$CHARS" != "0" ] && ctx="$(head -c "$CHARS" bin/coding-agent)"
+          prompt="$ctx
+
+          Create a file at path notes.txt containing the text hello. Call the write_file tool to do it."
+          req=$(jq -n --arg m "qwen2.5:0.5b" --arg p "$prompt" '{
+            model: $m,
+            messages: [{role:"user", content:$p}],
+            tools: [{type:"function", function:{name:"write_file", description:"Write text to a file", parameters:{type:"object", properties:{path:{type:"string"}, content:{type:"string"}}, required:["path","content"]}}}],
+            tool_choice: "auto",
+            stream: false
+          }')
+          resp=$(curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' -d "$req")
+          echo "--- response head ---"; echo "$resp" | head -c 1500; echo
+          verdict=$(printf '%s' "$resp" | python3 scripts/tool_probe_verdict.py)
+          echo "## ctx=$CHARS chars: $verdict" >> "$GITHUB_STEP_SUMMARY"
+          echo "VERDICT[ctx=$CHARS]: $verdict"
